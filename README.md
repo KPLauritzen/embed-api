@@ -145,7 +145,7 @@ from the fp32 ONNX file the model repo ships (ONNX Runtime's dynamic quantiser, 
 settings). At runtime the API needs only ONNX Runtime and a tokenizer: tokenise,
 truncate to 512, mean-pool over the attention mask, normalise. That is the same computation
 sentence-transformers does, and a slow test checks the two backends agree (same token
-counts, cosine > 0.98). Dropping torch takes the image from ~4 GB to ~1 GB. The PyTorch
+counts, cosine > 0.98). Dropping torch takes the image from 1.8 GB to 0.6 GB compressed (what a node pulls). The PyTorch
 backend stays as the fp32 reference and for GPUs.
 
 **Thread count follows the CPU limit.** PyTorch and ONNX Runtime size their thread pools

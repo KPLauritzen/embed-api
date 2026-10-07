@@ -68,7 +68,7 @@ client ──▶ RequestContext (request id, access log)
 - int8 dynamic quantisation, exported for **AVX2** (the deployment CPU); the Hub's int8 file needs AVX-512 VNNI
 - 4 threads (the pod's CPU limit), ~25-token inputs
 - Fidelity vs fp32 on a small Danish/English retrieval set: **2× throughput, ¼ the size, same rankings**
-- → **int8 is the default.** Export at build time; runtime is ONNX Runtime + tokenizers, **no torch** (image ~4 GB → ~1 GB). A test pins int8 ≈ fp32.
+- → **int8 is the default.** Export at build time; runtime is ONNX Runtime + tokenizers, **no torch** (image 1.8 → 0.6 GB compressed). A test pins int8 ≈ fp32.
 
 ---
 
