@@ -9,18 +9,17 @@ items move from here into scope.
   wait exceeds a budget.
 - **Strict truncation mode.** `truncate: false` → 422 naming the over-long input, for callers who
   would rather fail than embed a prefix of their text.
-- **Consistent error envelope for 422.** FastAPI's default validation body is kept; reformat it
-  into the same `{"error": {...}}` envelope as other errors.
 - **OpenAI-compatible alias** (`POST /v1/embeddings`) so existing clients work unchanged.
 
 ## Operations
 - **Authentication** (API keys or mTLS) and **rate limiting** per client.
 - **Prometheus metrics** (`/metrics`): request latency, tokens/s, queue depth, truncation rate.
-- **Container smoke test in CI**: start the image and curl `/health/ready`.
 - **Multi-arch image** (arm64 for Apple Silicon / Graviton).
 
 ## Performance
-- **Cross-request dynamic batching**: collect requests for a few ms and encode together.
+- **Cross-request dynamic batching**: collect requests for a few ms and encode together. With
+  the int8 backend this needs static (calibrated) quantisation first: dynamic quantisation
+  makes a text's embedding depend on its batch, which is why texts run one at a time today.
 - **Purpose-built server**: Hugging Face Text Embeddings Inference (TEI) or Triton.
 - **GPU** support and autoscaling.
 - **Embedding cache** keyed on (model revision, input_type, text hash).
@@ -29,3 +28,5 @@ items move from here into scope.
 - Type checking (pyright/mypy) in CI.
 - Task runner (justfile) for common commands.
 - Pretty console logs for local development (JSON-only today).
+- A larger fidelity evaluation of the int8 model (e.g. an MTEB retrieval task), beyond the
+  12-pair sanity check.

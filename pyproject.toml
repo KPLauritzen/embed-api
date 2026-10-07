@@ -60,3 +60,5 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 testpaths = ["tests"]
 markers = ["slow: needs the real model (deselect with -m 'not slow')"]
 addopts = "-m 'not slow'"
+# FastAPI's TestClient still wraps httpx; the warning is about a future httpx2.
+filterwarnings = ["ignore:Using .httpx. with .starlette.testclient. is deprecated"]

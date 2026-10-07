@@ -1,37 +1,34 @@
-# /// script
-# requires-python = ">=3.12,<3.13"
-# dependencies = ["sentence-transformers[onnx]", "torch"]
-#
-# [tool.uv.sources]
-# torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
-#
-# [[tool.uv.index]]
-# name = "pytorch-cpu"
-# url = "https://download.pytorch.org/whl/cpu"
-# explicit = true
-# ///
-"""Compare PyTorch fp32, ONNX fp32 and ONNX int8 for speed and fidelity.
+"""Speed and fidelity of the API's backends, measured through the API's own code.
 
-    uv run scripts/benchmark.py --model models/e5 --threads 4
+    uv run scripts/download_model.py && uv run scripts/export_onnx.py   # once
+    uv run python scripts/benchmark.py --threads 4
 
-Runs as a standalone script with its own dependencies: the ONNX tooling
-(optimum) pins an older transformers, which should not leak into the API's
-lockfile. The int8 model is quantised for AVX2, the instruction set of the
-deployment node; the int8 file shipped on the Hub targets AVX-512 VNNI.
+Three rows, each timed through the embedder class the server uses:
 
-Fidelity is measured against PyTorch fp32 on a small Danish/English retrieval
-set: per-text cosine similarity, and whether each query's top-ranked passage
-is unchanged.
+- torch fp32: the reference (sentence-transformers, batches of 16)
+- ONNX Runtime fp32: the Hub's fp32 ONNX export through OnnxEmbedder, which
+  separates the runtime's contribution from quantisation's (downloaded once
+  to models/e5-onnx-fp32)
+- ONNX Runtime int8: what the API serves (models/e5-int8)
+
+Fidelity is measured against torch fp32 on a small Danish/English retrieval
+set: cosine similarity between the embeddings (mean and minimum), and whether
+each query's top-ranked passage is unchanged. Twelve pairs make this a sanity
+check, not an evaluation.
 """
 
 import argparse
+import json
+import shutil
 import statistics
 import time
 from pathlib import Path
 
 import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer, export_dynamic_quantized_onnx_model
+from huggingface_hub import snapshot_download
+
+from embed_api.config import DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, Backend, Settings
+from embed_api.embedder import Embedder, load_embedder
 
 # (query, relevant passage) pairs; every other passage is a distractor.
 PAIRS = [
@@ -48,112 +45,90 @@ PAIRS = [
     ("hvorfor er himlen blå?", "Sunlight is scattered by air molecules, blue light the most."),
     ("rules of handball", "I håndbold må en spiller højst tage tre skridt med bolden."),
 ]
+QUERIES = [f"query: {q}" for q, _ in PAIRS]
+PASSAGES = [f"passage: {p}" for _, p in PAIRS]
 
 SENTENCE = (
-    "Dette er en typisk sætning på omkring tyve ord, som bruges til at måle, "
+    "passage: Dette er en typisk sætning på omkring tyve ord, som bruges til at måle, "
     "hvor hurtigt modellen svarer på en almindelig CPU."
 )
 
 
-def encode(model: SentenceTransformer, texts: list[str]) -> np.ndarray:
-    return model.encode(texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False)
+def fp32_onnx_dir(int8_dir: Path, dest: Path) -> Path:
+    """The Hub's fp32 ONNX export, laid out like the int8 directory."""
+    if not (dest / "model.onnx").exists():
+        snapshot_download(
+            repo_id=DEFAULT_MODEL_ID,
+            revision=DEFAULT_MODEL_REVISION,
+            allow_patterns=["onnx/model.onnx", "onnx/model.onnx_data"],
+            local_dir=dest,
+        )
+        for name in ("model.onnx", "model.onnx_data"):
+            shutil.move(dest / "onnx" / name, dest / name)
+        for name in ("tokenizer.json", "sentence_bert_config.json"):
+            shutil.copy(int8_dir / name, dest / name)
+        source = {"model_id": DEFAULT_MODEL_ID, "revision": DEFAULT_MODEL_REVISION}
+        (dest / "source.json").write_text(json.dumps(source))
+    return dest
 
 
-def latency(model: SentenceTransformer, batch: int, repeats: int) -> tuple[float, float]:
-    texts = [f"passage: {SENTENCE}"] * batch
-    encode(model, texts)  # warm-up
+def p50_ms(model: Embedder, batch: int, repeats: int) -> float:
+    texts = [SENTENCE] * batch
+    model.embed(texts)  # warm-up
     times = []
     for _ in range(repeats):
         start = time.perf_counter()
-        encode(model, texts)
+        model.embed(texts)
         times.append((time.perf_counter() - start) * 1000)
-    times.sort()
-    return statistics.median(times), times[int(0.95 * (len(times) - 1))]
+    return statistics.median(times)
 
 
-def fidelity(reference: SentenceTransformer, candidate: SentenceTransformer) -> tuple[float, float]:
-    queries = [f"query: {q}" for q, _ in PAIRS]
-    passages = [f"passage: {p}" for _, p in PAIRS]
-    ref_q, ref_p = encode(reference, queries), encode(reference, passages)
-    cand_q, cand_p = encode(candidate, queries), encode(candidate, passages)
-    cosine = float(np.mean(np.sum(np.vstack([ref_q, ref_p]) * np.vstack([cand_q, cand_p]), 1)))
-    same_top1 = float(np.mean((ref_q @ ref_p.T).argmax(1) == (cand_q @ cand_p.T).argmax(1)))
-    return cosine, same_top1
-
-
-def recall_at_1(model: SentenceTransformer) -> float:
-    q = encode(model, [f"query: {q}" for q, _ in PAIRS])
-    p = encode(model, [f"passage: {p}" for _, p in PAIRS])
-    return float(np.mean((q @ p.T).argmax(1) == np.arange(len(PAIRS))))
-
-
-def size_mb(path: Path) -> float:
-    return sum(f.stat().st_size for f in path.parent.glob(path.name + "*")) / 1e6
+def weights_mb(backend: Backend, path: Path) -> float:
+    if backend is Backend.TORCH:
+        return (path / "model.safetensors").stat().st_size / 1e6
+    return sum(f.stat().st_size for f in path.iterdir() if f.name.startswith("model.")) / 1e6
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="models/e5")
-    parser.add_argument("--onnx-dir", default="models/e5-onnx")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--torch-path", default="models/e5")
+    parser.add_argument("--int8-path", default="models/e5-int8")
+    parser.add_argument("--fp32-onnx-path", default="models/e5-onnx-fp32")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--repeats", type=int, default=10)
     args = parser.parse_args()
 
-    torch.set_num_threads(args.threads)
-    onnx_dir = Path(args.onnx_dir)
-    onnx_kwargs = {"provider": "CPUExecutionProvider"}
-
-    if not (onnx_dir / "onnx" / "model_quint8_avx2.onnx").exists():
-        print("exporting ONNX (one-off, a few minutes)...", flush=True)
-        exported = SentenceTransformer(args.model, backend="onnx", model_kwargs=onnx_kwargs)
-        exported.save_pretrained(str(onnx_dir))
-        export_dynamic_quantized_onnx_model(exported, "avx2", str(onnx_dir))
-        del exported
-
-    import onnxruntime as ort
-
-    options = ort.SessionOptions()
-    options.intra_op_num_threads = args.threads
-    ort_kwargs = {**onnx_kwargs, "session_options": options}
-
-    backends = {
-        "torch fp32": (
-            SentenceTransformer(args.model, device="cpu"),
-            Path(args.model) / "model.safetensors",
-        ),
-        "onnx fp32": (
-            SentenceTransformer(str(onnx_dir), backend="onnx", model_kwargs=ort_kwargs),
-            onnx_dir / "onnx" / "model.onnx",
-        ),
-        "onnx int8 (avx2)": (
-            SentenceTransformer(
-                str(onnx_dir),
-                backend="onnx",
-                model_kwargs={**ort_kwargs, "file_name": "onnx/model_quint8_avx2.onnx"},
-            ),
-            onnx_dir / "onnx" / "model_quint8_avx2.onnx",
-        ),
+    int8 = Path(args.int8_path)
+    paths = {
+        "torch fp32": (Backend.TORCH, Path(args.torch_path)),
+        "ONNX Runtime fp32": (Backend.ONNX, fp32_onnx_dir(int8, Path(args.fp32_onnx_path))),
+        "ONNX Runtime int8 (served)": (Backend.ONNX, int8),
     }
-    reference = backends["torch fp32"][0]
+    models = {
+        name: load_embedder(Settings(backend=b, model_path=str(p), num_threads=args.threads))
+        for name, (b, p) in paths.items()
+    }
+    ref_q, ref_p = (models["torch fp32"].embed(t) for t in (QUERIES, PASSAGES))
+    ref_top1 = (ref_q @ ref_p.T).argmax(1)
 
-    print(f"\n{args.threads} threads, ~25-token inputs, {args.repeats} repeats\n")
+    print(f"\n{args.threads} threads, ~30-token inputs, median of {args.repeats} runs\n")
     print(
-        "| Backend | Size | p50 b=1 | p50 b=8 | p50 b=32 | p95 b=32 | Texts/s (b=32) "
-        "| Cosine vs fp32 | Same top-1 | Recall@1 |"
+        "| Backend | Weights | 1 text | 8 texts | 32 texts | Texts/s "
+        "| Cosine vs fp32 (mean / min) | Same top-1 |"
     )
-    print("|---|---|---|---|---|---|---|---|---|---|")
-    for name, (model, weights) in backends.items():
-        p50 = {b: latency(model, b, args.repeats) for b in (1, 8, 32)}
-        cosine, same = fidelity(reference, model)
+    print("|---|---|---|---|---|---|---|---|")
+    for name, model in models.items():
+        q, p = model.embed(QUERIES), model.embed(PASSAGES)
+        cosines = np.concatenate([np.sum(q * ref_q, 1), np.sum(p * ref_p, 1)])
+        same_top1 = np.mean((q @ p.T).argmax(1) == ref_top1)
+        ms = {b: p50_ms(model, b, args.repeats) for b in (1, 8, 32)}
         cells = [
             name,
-            f"{size_mb(weights):,.0f} MB",
-            *(f"{p50[b][0]:.0f} ms" for b in (1, 8, 32)),
-            f"{p50[32][1]:.0f} ms",
-            f"{32 / p50[32][0] * 1000:.0f}",
-            f"{cosine:.4f}",
-            f"{same:.0%}",
-            f"{recall_at_1(model):.0%}",
+            f"{weights_mb(*paths[name]):,.0f} MB",
+            *(f"{ms[b]:,.0f} ms" for b in (1, 8, 32)),
+            f"{32 / ms[32] * 1000:.0f}",
+            f"{cosines.mean():.4f} / {cosines.min():.4f}",
+            f"{same_top1:.0%}",
         ]
         print("| " + " | ".join(cells) + " |", flush=True)
 
