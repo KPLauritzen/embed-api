@@ -1,8 +1,176 @@
-from fastapi import FastAPI
+import asyncio
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from typing import Annotated, Any
 
-app = FastAPI(title="embeda-api")
+import anyio.to_thread
+import structlog
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import RedirectResponse
+
+from embeda_api import errors
+from embeda_api.config import Settings, get_settings
+from embeda_api.embedder import Embedder, EmbeddingService, SentenceTransformerEmbedder
+from embeda_api.errors import APIError, ErrorResponse
+from embeda_api.logging import BodySizeLimitMiddleware, RequestContextMiddleware, configure_logging
+from embeda_api.schemas import (
+    MAX_CHARS,
+    MAX_INPUTS,
+    Embedding,
+    EmbedRequest,
+    EmbedResponse,
+    HealthResponse,
+    InfoResponse,
+    Limits,
+    Usage,
+)
+
+log = structlog.get_logger(__name__)
+
+EmbedderFactory = Callable[[Settings], Embedder]
+
+DESCRIPTION = """
+HTTP API for [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large):
+1024-dimensional, L2-normalised text embeddings for 100 languages.
+
+* Send raw text and an `input_type`; the server adds e5's `query: ` / `passage: ` prefix.
+* Inputs over 512 tokens are truncated and flagged `truncated: true`.
+* Every response carries an `X-Request-ID` header; errors also include it in the body.
+"""
+
+_ERRORS: dict[int | str, dict[str, Any]] = {
+    413: {"model": ErrorResponse, "description": "Request body too large."},
+    500: {"model": ErrorResponse, "description": "Unexpected server error."},
+    503: {"model": ErrorResponse, "description": "Model still loading, or failed to load."},
+}
 
 
-@app.get("/health/live")
-def live() -> dict[str, str]:
-    return {"status": "ok"}
+class ModelState:
+    """Holds the embedding service once the background load has finished."""
+
+    def __init__(self) -> None:
+        self.service: EmbeddingService | None = None
+        self.failed = False
+
+
+def _load(factory: EmbedderFactory, settings: Settings) -> Embedder:
+    embedder = factory(settings)
+    embedder.embed(["query: warm-up"])  # first call pays one-off allocation costs
+    return embedder
+
+
+async def _load_in_background(
+    state: ModelState, factory: EmbedderFactory, settings: Settings
+) -> None:
+    log.info("model_loading", model=settings.model_id, path=settings.model_path)
+    try:
+        embedder = await anyio.to_thread.run_sync(_load, factory, settings)
+    except Exception:
+        state.failed = True
+        log.exception("model_load_failed")
+        return
+    state.service = EmbeddingService(embedder, settings)
+    log.info("model_ready", dimension=embedder.dimension, max_tokens=embedder.max_tokens)
+
+
+def create_app(
+    settings: Settings | None = None,
+    embedder_factory: EmbedderFactory = SentenceTransformerEmbedder,
+) -> FastAPI:
+    settings = settings or get_settings()
+    configure_logging(settings.log_level)
+    state = ModelState()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Loading takes tens of seconds. Doing it in the background lets the
+        # server answer straight away: liveness passes, readiness reports 503
+        # until the model is warm, and orchestrators can tell the two apart.
+        task = asyncio.create_task(_load_in_background(state, embedder_factory, settings))
+        yield
+        task.cancel()
+
+    app = FastAPI(
+        title="embeda-api",
+        version="0.1.0",
+        description=DESCRIPTION,
+        lifespan=lifespan,
+    )
+    app.state.model = state
+    errors.register(app)
+    # Added last = outermost: the request id exists before the size check runs.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
+    app.add_middleware(RequestContextMiddleware)
+
+    def get_service() -> EmbeddingService:
+        if state.service is not None:
+            return state.service
+        if state.failed:
+            raise APIError(503, "model_load_failed", "The model failed to load; see server logs.")
+        raise APIError(503, "model_not_ready", "The model is still loading. Retry shortly.")
+
+    Service = Annotated[EmbeddingService, Depends(get_service)]
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse("/docs")
+
+    @app.post(
+        "/v1/embed",
+        tags=["embeddings"],
+        summary="Embed one or more texts",
+        responses={**_ERRORS, 422: {"description": "Invalid input or token budget exceeded."}},
+    )
+    async def embed(body: EmbedRequest, request: Request, service: Service) -> EmbedResponse:
+        result = await service.embed(body.input, body.input_type)
+        request.state.log_fields.update(
+            n_inputs=len(body.input),
+            input_type=body.input_type.value,
+            total_tokens=result.total_tokens,
+            n_truncated=sum(result.truncated),
+        )
+        return EmbedResponse(
+            model=service.embedder.model_name,
+            input_type=body.input_type,
+            dimension=service.embedder.dimension,
+            embeddings=[
+                Embedding(index=i, embedding=vector.tolist(), tokens=tokens, truncated=truncated)
+                for i, (vector, tokens, truncated) in enumerate(
+                    zip(result.vectors, result.token_counts, result.truncated, strict=True)
+                )
+            ],
+            usage=Usage(total_tokens=result.total_tokens),
+        )
+
+    @app.get("/v1/info", tags=["meta"], summary="Model and limits", responses=_ERRORS)
+    def info(service: Service) -> InfoResponse:
+        return InfoResponse(
+            model=service.embedder.model_name,
+            revision=settings.model_revision,
+            dimension=service.embedder.dimension,
+            limits=Limits(
+                max_inputs=MAX_INPUTS,
+                max_chars_per_input=MAX_CHARS,
+                max_tokens_per_input=service.embedder.max_tokens,
+                max_total_tokens=settings.max_total_tokens,
+                max_body_bytes=settings.max_body_bytes,
+            ),
+        )
+
+    @app.get("/health/live", tags=["health"], summary="Process is up")
+    def live() -> HealthResponse:
+        return HealthResponse(status="ok")
+
+    @app.get(
+        "/health/ready",
+        tags=["health"],
+        summary="Model loaded and warmed up",
+        responses={503: _ERRORS[503]},
+    )
+    def ready(_: Service) -> HealthResponse:
+        return HealthResponse(status="ready")
+
+    return app
+
+
+app = create_app()
