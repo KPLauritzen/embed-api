@@ -26,7 +26,7 @@ Interactive Swagger docs are at **`/docs`** once the server is running.
 
 ## Quickstart
 
-**Requirements:** Python 3.12 and [uv](https://docs.astral.sh/uv/); ~8 GB free RAM and
+**Requirements:** Python 3.12 and [uv](https://docs.astral.sh/uv/); ~9 GB free RAM and
 ~5 GB disk for the one-off export, ~2.5 GB RAM to serve. The download is 2.2 GB and the
 export takes a few minutes; after that the server is ready within seconds of starting.
 
@@ -140,8 +140,9 @@ Liveness answers immediately and readiness returns 503 until the model is warm, 
 orchestrator can tell "starting" from "broken". Loading inside startup would just refuse
 connections.
 
-**int8 ONNX by default, without torch.** The export (optimum + torch) happens once, at
-image build time. At runtime the API needs only ONNX Runtime and a tokenizer: tokenise,
+**int8 ONNX by default, without torch.** Quantisation happens once, at image build time,
+from the fp32 ONNX file the model repo ships (ONNX Runtime's dynamic quantiser, AVX2
+settings). At runtime the API needs only ONNX Runtime and a tokenizer: tokenise,
 truncate to 512, mean-pool over the attention mask, normalise. That is the same computation
 sentence-transformers does, and a slow test checks the two backends agree (same token
 counts, cosine > 0.98). Dropping torch takes the image from ~4 GB to ~1 GB. The PyTorch
