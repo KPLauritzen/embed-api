@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["onnxruntime==1.30.0", "huggingface-hub==1.33.0"]
+# dependencies = ["onnxruntime==1.30.0", "onnx==1.23.2", "huggingface-hub==1.33.0"]
 # ///
 """Build the int8 ONNX model the default backend serves.
 
