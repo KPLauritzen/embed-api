@@ -59,10 +59,15 @@ client ──▶ RequestContext (request id, access log)
 
 <!-- Filled from scripts/benchmark.py -->
 
-BENCHMARK_TABLE
+| Backend | Weights | p50, 1 text | p50, 8 texts | p50, 32 texts | Texts/s | Cosine vs fp32 | Same top-1 |
+|---|---|---|---|---|---|---|---|
+| PyTorch fp32 | 2,240 MB | 114 ms | 494 ms | 1,842 ms | 17 | 1.0000 | 100% |
+| ONNX fp32 | 2,236 MB | 58 ms | 339 ms | 1,335 ms | 24 | 1.0000 | 100% |
+| ONNX int8 (AVX2) | 562 MB | 36 ms | 233 ms | 931 ms | 34 | 0.9948 | 100% |
 
 - int8 dynamic quantisation, exported for **AVX2** (the deployment CPU); the Hub's int8 file needs AVX-512 VNNI
-- Fidelity checked against fp32 on a Danish/English retrieval set
+- 4 threads (the pod's CPU limit), ~25-token inputs
+- Fidelity vs fp32 on a small Danish/English retrieval set: **2× throughput, ¼ the size, same rankings**
 
 ---
 

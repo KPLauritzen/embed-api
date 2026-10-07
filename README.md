@@ -151,6 +151,25 @@ suite uses a deterministic fake and covers the HTTP contract in under a second; 
 `slow` suite checks the real model, comparing orderings rather than absolute scores,
 because e5 similarities cluster in 0.7–1.0.
 
+## Performance
+
+`scripts/benchmark.py` compares PyTorch fp32 with ONNX Runtime fp32 and int8 (dynamic
+quantisation for AVX2), at 4 threads, on ~25-token inputs. Fidelity is measured against
+PyTorch fp32 on a small Danish/English retrieval set: mean cosine similarity between the
+embeddings, and whether each query's top-ranked passage is unchanged.
+
+| Backend | Weights | p50, 1 text | p50, 8 texts | p50, 32 texts | Texts/s | Cosine vs fp32 | Same top-1 |
+|---|---|---|---|---|---|---|---|
+| PyTorch fp32 | 2,240 MB | 114 ms | 494 ms | 1,842 ms | 17 | 1.0000 | 100% |
+| ONNX fp32 | 2,236 MB | 58 ms | 339 ms | 1,335 ms | 24 | 1.0000 | 100% |
+| ONNX int8 (AVX2) | 562 MB | 36 ms | 233 ms | 931 ms | 34 | 0.9948 | 100% |
+
+int8 doubles throughput and quarters the model size with near-identical embeddings. The
+retrieval set is small (12 query/passage pairs), so treat the fidelity numbers as a sanity
+check rather than an evaluation. Numbers are from an AMD Ryzen 9 5950X; rerun with
+`uv run scripts/benchmark.py --threads 4`. The script has its own inline dependencies,
+because the ONNX tooling pins an older `transformers` than the API uses.
+
 ## Project layout
 
 ```
