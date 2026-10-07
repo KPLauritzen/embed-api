@@ -110,16 +110,13 @@ class RequestContextMiddleware:
                 )
 
 
-class _BodyTooLarge(Exception):
-    pass
-
-
 class BodySizeLimitMiddleware:
-    """Rejects oversized bodies with 413 before they are buffered and parsed.
+    """Rejects oversized bodies with 413 before they are parsed.
 
     Neither uvicorn nor FastAPI caps body size, and pydantic's limits only apply
-    after the whole body is in memory. Content-Length is checked up front; a
-    chunked body is counted as it streams in.
+    after the whole body is in memory. A declared Content-Length is checked up
+    front (the server enforces that the body matches it). A chunked body has no
+    length, so it is read here, up to the limit, and replayed to the app.
     """
 
     def __init__(self, app: ASGIApp, max_bytes: int) -> None:
@@ -132,34 +129,39 @@ class BodySizeLimitMiddleware:
             return
 
         declared = dict(scope["headers"]).get(b"content-length")
-        if declared is not None and int(declared) > self.max_bytes:
-            await self._reject(scope, receive, send)
+        if declared is not None:
+            if int(declared) > self.max_bytes:
+                await self._reject(scope, receive, send)
+            else:
+                await self.app(scope, receive, send)
             return
 
-        received = 0
-        response_started = False
-
-        async def counting_receive() -> Message:
-            nonlocal received
+        chunks: list[bytes] = []
+        size = 0
+        while True:
             message = await receive()
-            if message["type"] == "http.request":
-                received += len(message.get("body", b""))
-                if received > self.max_bytes:
-                    raise _BodyTooLarge
-            return message
+            if message["type"] == "http.disconnect":
+                return
+            chunk = message.get("body", b"")
+            size += len(chunk)
+            if size > self.max_bytes:
+                await self._reject(scope, receive, send)
+                return
+            chunks.append(chunk)
+            if not message.get("more_body", False):
+                break
 
-        async def tracking_send(message: Message) -> None:
-            nonlocal response_started
-            if message["type"] == "http.response.start":
-                response_started = True
-            await send(message)
+        body = b"".join(chunks)
+        replayed = False
 
-        try:
-            await self.app(scope, counting_receive, tracking_send)
-        except _BodyTooLarge:
-            if response_started:
-                raise
-            await self._reject(scope, receive, send)
+        async def replay() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
 
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
         response = error_response(
