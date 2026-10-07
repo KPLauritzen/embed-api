@@ -85,7 +85,7 @@ Batched, a text's embedding depended on its neighbours in the request: cosine **
 
 - **Docker**: int8 model built in a separate stage from a pinned revision; runtime has no torch; non-root, read-only root fs
 - **CI**: ruff + tests → build → **smoke-test the container** → push to GHCR
-- **CD**: GitOps on my k3s homelab. Image updater + ArgoCD roll out each new digest. On the node: ready in 1.9 s, 64 ms per text, 2.2 GB peak
+- **CD**: GitOps on my k3s homelab. Image updater + ArgoCD roll out each new digest. On the node: ready in 1.7 s, 68 ms per text, 1.45 GB peak
 
 **What I'd add for real production:** queue timeout with `Retry-After` · auth + rate limiting · Prometheus metrics · a larger quality eval · or Hugging Face TEI instead of a hand-written server
 

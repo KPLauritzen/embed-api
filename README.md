@@ -209,7 +209,8 @@ The image runs on a two-node k3s homelab, deployed GitOps-style: CI pushes to GH
 argocd-image-updater picks up the new digest, ArgoCD rolls it out. The pod has a 4-CPU
 limit (hence the 4 threads above), a read-only root filesystem, readiness on
 `/health/ready` and liveness on `/health/live`. On that node (Ryzen 5 6600U), through the
-ingress: model ready in 1.9 s, 64 ms for one text, 1.2 s for 32, 2.2 GB peak memory. The
+ingress: model ready in 1.7 s, 68 ms for one text, 1.4 s for 32, 9.9 s for a full
+8192-token request, 1.45 GB peak memory. The
 manifests live in a separate infrastructure repository.
 
 ## Project layout
