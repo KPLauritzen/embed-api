@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 
 from embed_api import errors
 from embed_api.config import Settings, get_settings
-from embed_api.embedder import Embedder, EmbeddingService, SentenceTransformerEmbedder
+from embed_api.embedder import Embedder, EmbeddingService, load_embedder
 from embed_api.errors import APIError, ErrorResponse
 from embed_api.logging import BodySizeLimitMiddleware, RequestContextMiddleware, configure_logging
 from embed_api.schemas import (
@@ -62,7 +62,12 @@ def _load(factory: EmbedderFactory, settings: Settings) -> Embedder:
 async def _load_in_background(
     state: ModelState, factory: EmbedderFactory, settings: Settings
 ) -> None:
-    log.info("model_loading", model=settings.model_id, path=settings.model_path)
+    log.info(
+        "model_loading",
+        model=settings.model_id,
+        backend=settings.backend.value,
+        path=settings.model_path,
+    )
     try:
         embedder = await anyio.to_thread.run_sync(_load, factory, settings)
     except Exception:
@@ -70,12 +75,17 @@ async def _load_in_background(
         log.exception("model_load_failed")
         return
     state.service = EmbeddingService(embedder, settings)
-    log.info("model_ready", dimension=embedder.dimension, max_tokens=embedder.max_tokens)
+    log.info(
+        "model_ready",
+        backend=embedder.backend,
+        dimension=embedder.dimension,
+        max_tokens=embedder.max_tokens,
+    )
 
 
 def create_app(
     settings: Settings | None = None,
-    embedder_factory: EmbedderFactory = SentenceTransformerEmbedder,
+    embedder_factory: EmbedderFactory = load_embedder,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
@@ -147,6 +157,7 @@ def create_app(
         return InfoResponse(
             model=service.embedder.model_name,
             revision=settings.model_revision,
+            backend=service.embedder.backend,
             dimension=service.embedder.dimension,
             limits=Limits(
                 max_inputs=MAX_INPUTS,

@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-# --- deps: resolve the locked environment (CPU-only torch) -----------------
+# --- deps: the locked runtime environment ----------------------------------
+# Default dependencies only: ONNX Runtime + tokenizers, no torch.
 FROM python:3.12-slim AS deps
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
@@ -15,13 +16,17 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-# --- model: fetch the pinned revision, only the files we load --------------
-# Independent of the app's code and deps, so the 2.2 GB layer is only rebuilt
-# when the download script (and with it the pinned revision) changes.
+# --- model: download the pinned revision, export to int8 ONNX --------------
+# Depends only on the two scripts (which pin the revision and the export
+# tooling), so it is rebuilt only when they change. The export needs torch and
+# optimum, which stay in this stage; only the ~580 MB result is copied out.
 FROM python:3.12-slim AS model
-RUN pip install --no-cache-dir "huggingface-hub==1.33.0"
-COPY scripts/download_model.py /scripts/
-RUN python /scripts/download_model.py --dest /models/e5
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
+ENV UV_PYTHON_DOWNLOADS=never
+COPY scripts/download_model.py scripts/export_onnx.py /scripts/
+RUN uv run /scripts/download_model.py --dest /build/e5 \
+    && uv run /scripts/export_onnx.py --src /build/e5 --dest /models/e5-int8 \
+    && rm -rf /build /root/.cache
 
 # --- runtime ---------------------------------------------------------------
 FROM python:3.12-slim AS runtime
@@ -31,13 +36,10 @@ COPY --from=model /models /models
 COPY --from=deps /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    HF_HUB_OFFLINE=1 \
-    # Writable even with a read-only root filesystem (/tmp is a mount).
-    HF_HOME=/tmp/huggingface \
-    TRANSFORMERS_OFFLINE=1 \
-    # Bounds glibc arena growth from variable-shaped tensor allocations.
+    # Bounds glibc arena growth from variable-shaped allocations.
     MALLOC_ARENA_MAX=2 \
-    EMBED_MODEL_PATH=/models/e5
+    EMBED_BACKEND=onnx \
+    EMBED_MODEL_PATH=/models/e5-int8
 USER 10001
 EXPOSE 8000
 CMD ["uvicorn", "embed_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

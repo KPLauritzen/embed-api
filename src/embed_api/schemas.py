@@ -119,6 +119,7 @@ class Limits(BaseModel):
 class InfoResponse(BaseModel):
     model: str
     revision: str
+    backend: str = Field(description="onnx-int8 (default) or torch-fp32.")
     dimension: int
     limits: Limits
 

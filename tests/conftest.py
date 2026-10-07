@@ -14,6 +14,7 @@ class FakeEmbedder:
     """Deterministic stand-in for the model: one token per word plus two special tokens."""
 
     model_name = "fake/e5"
+    backend = "fake"
     dimension = 8
     max_tokens = 16
 

@@ -1,6 +1,12 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["huggingface-hub==1.33.0"]
+# ///
 """Download the pinned model revision to a local directory.
 
-Only the files the PyTorch sentence-transformers path needs are fetched; the
+Only the files the sentence-transformers path needs are fetched (the torch
+backend loads them directly; scripts/export_onnx.py turns them into the int8
+model the default backend uses). The
 Hugging Face repo also carries a .bin copy, ONNX and OpenVINO exports (~9.5 GB
 in total). The model is loaded from this directory by path, which works offline
 without relying on the Hugging Face cache layout.

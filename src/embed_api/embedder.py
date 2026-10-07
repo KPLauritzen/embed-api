@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol
+from pathlib import Path
+from typing import Protocol
 
 import anyio.to_thread
 import numpy as np
 
+from embed_api.config import DEFAULT_ONNX_PATH, Backend, Settings
 from embed_api.errors import APIError
-
-if TYPE_CHECKING:
-    from embed_api.config import Settings
 
 
 class InputType(StrEnum):
@@ -25,6 +25,7 @@ class InputType(StrEnum):
 
 class Embedder(Protocol):
     model_name: str
+    backend: str
     dimension: int
     max_tokens: int
 
@@ -35,6 +36,61 @@ class Embedder(Protocol):
     def embed(self, texts: list[str]) -> np.ndarray:
         """L2-normalised embeddings, one row per text. Over-long texts are truncated."""
         ...
+
+
+class OnnxEmbedder:
+    """The int8 model from scripts/export_onnx.py, run with ONNX Runtime.
+
+    Reproduces what sentence-transformers does for e5 (tokenise, truncate to
+    512, mean-pool over the attention mask, L2-normalise) without torch. The
+    slow test suite checks it against the torch backend.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+
+        path = Path(settings.model_path or DEFAULT_ONNX_PATH)
+        config = json.loads((path / "sentence_bert_config.json").read_text())
+        self.max_tokens = int(config["max_seq_length"])
+
+        # Two tokenizers: one untruncated, to count tokens and flag truncation,
+        # and one that truncates and pads for the model.
+        self._counter = Tokenizer.from_file(str(path / "tokenizer.json"))
+        self._counter.no_truncation()
+        self._counter.no_padding()
+        self._tokenizer = Tokenizer.from_file(str(path / "tokenizer.json"))
+        self._tokenizer.enable_truncation(max_length=self.max_tokens)
+        pad_id = self._tokenizer.token_to_id("<pad>")
+        self._tokenizer.enable_padding(pad_id=pad_id, pad_token="<pad>")
+
+        options = ort.SessionOptions()
+        if settings.num_threads:
+            options.intra_op_num_threads = settings.num_threads
+        self._session = ort.InferenceSession(
+            str(path / "model.onnx"), options, providers=["CPUExecutionProvider"]
+        )
+        self._batch_size = settings.encode_batch_size
+        self.model_name = settings.model_id
+        self.backend = "onnx-int8"
+        self.dimension = int(self._session.get_outputs()[0].shape[-1])
+
+    def count_tokens(self, texts: list[str]) -> list[int]:
+        return [len(encoding.ids) for encoding in self._counter.encode_batch(texts)]
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        batches = []
+        for start in range(0, len(texts), self._batch_size):
+            encodings = self._tokenizer.encode_batch(texts[start : start + self._batch_size])
+            input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+            mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+            (hidden,) = self._session.run(
+                ["last_hidden_state"], {"input_ids": input_ids, "attention_mask": mask}
+            )
+            weights = mask[:, :, None].astype(np.float32)
+            pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
+            batches.append(pooled / np.linalg.norm(pooled, axis=1, keepdims=True))
+        return np.vstack(batches)
 
 
 class SentenceTransformerEmbedder:
@@ -58,6 +114,7 @@ class SentenceTransformerEmbedder:
             )
         self._batch_size = settings.encode_batch_size
         self.model_name = settings.model_id
+        self.backend = "torch-fp32"
         self.dimension = self._model.get_embedding_dimension()
         self.max_tokens = self._model.max_seq_length
 
@@ -75,6 +132,12 @@ class SentenceTransformerEmbedder:
             convert_to_numpy=True,
             show_progress_bar=False,
         )
+
+
+def load_embedder(settings: Settings) -> Embedder:
+    if settings.backend is Backend.TORCH:
+        return SentenceTransformerEmbedder(settings)
+    return OnnxEmbedder(settings)
 
 
 @dataclass(frozen=True)

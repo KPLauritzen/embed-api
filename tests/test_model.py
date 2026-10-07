@@ -1,51 +1,60 @@
-"""Checks against the real model. Run with `uv run pytest -m slow`.
+"""Checks against the real model, for both backends. Run with `uv run pytest -m slow`.
 
-Set EMBED_MODEL_PATH to a downloaded model (scripts/download_model.py) to
-avoid fetching from the Hub. e5 similarities cluster in 0.7-1.0, so the
-assertions compare orderings rather than absolute thresholds.
+Expects the models from the README quickstart: ./models/e5 (torch, from
+scripts/download_model.py) and ./models/e5-int8 (onnx, from
+scripts/export_onnx.py). A backend whose model is missing is skipped. e5
+similarities cluster in 0.7-1.0, so assertions compare orderings rather than
+absolute thresholds.
 """
 
-import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from embed_api.config import Settings
+from embed_api.config import Backend, Settings
+from embed_api.embedder import Embedder, load_embedder
 
 pytestmark = pytest.mark.slow
 
-DEFAULT_PATH = Path(__file__).parent.parent / "models" / "e5"
+MODELS = Path(__file__).parent.parent / "models"
+PATHS = {Backend.TORCH: MODELS / "e5", Backend.ONNX: MODELS / "e5-int8"}
+
+TEXTS = [
+    "query: hvad er hovedstaden i Danmark?",
+    "passage: København er Danmarks hovedstad og største by.",
+    "passage: Bananer er en god kilde til kalium.",
+    "query: The cat is sleeping on the couch.",
+    "passage: " + "lang tekst " * 400,  # truncated at 512 tokens
+]
 
 
-@pytest.fixture(scope="module")
-def model():
-    from embed_api.embedder import SentenceTransformerEmbedder
+def _load(backend: Backend) -> Embedder:
+    path = PATHS[backend]
+    if not path.exists():
+        pytest.skip(f"{path} not found; see the README quickstart")
+    return load_embedder(Settings(backend=backend, model_path=str(path)))
 
-    path = os.environ.get("EMBED_MODEL_PATH") or (DEFAULT_PATH if DEFAULT_PATH.exists() else None)
-    return SentenceTransformerEmbedder(Settings(model_path=str(path) if path else None))
+
+@pytest.fixture(scope="module", params=list(Backend), ids=lambda b: b.value)
+def model(request: pytest.FixtureRequest) -> Embedder:
+    return _load(request.param)
 
 
-def test_shape_and_norm(model) -> None:
+def test_shape_and_norm(model: Embedder) -> None:
     vectors = model.embed(["query: hej", "passage: verden"])
 
     assert vectors.shape == (2, 1024)
     assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0, atol=1e-5)
 
 
-def test_query_prefers_relevant_passage(model) -> None:
-    query, relevant, irrelevant = model.embed(
-        [
-            "query: hvad er hovedstaden i Danmark?",
-            "passage: København er Danmarks hovedstad og største by.",
-            "passage: Bananer er en god kilde til kalium.",
-        ]
-    )
+def test_query_prefers_relevant_passage(model: Embedder) -> None:
+    query, relevant, irrelevant = model.embed(TEXTS[:3])
 
     assert query @ relevant > query @ irrelevant
 
 
-def test_danish_and_english_paraphrases_are_close(model) -> None:
+def test_danish_and_english_paraphrases_are_close(model: Embedder) -> None:
     danish, english, unrelated = model.embed(
         [
             "query: Katten sover på sofaen.",
@@ -57,9 +66,17 @@ def test_danish_and_english_paraphrases_are_close(model) -> None:
     assert danish @ english > danish @ unrelated
 
 
-def test_token_count_includes_prefix_and_special_tokens(model) -> None:
+def test_token_count_includes_prefix_and_special_tokens(model: Embedder) -> None:
     [with_prefix] = model.count_tokens(["query: hej"])
     [bare] = model.count_tokens(["hej"])
 
     assert with_prefix > bare >= 3  # <s> hej </s>
     assert model.max_tokens == 512
+
+
+def test_onnx_int8_matches_torch_fp32() -> None:
+    torch_model, onnx_model = _load(Backend.TORCH), _load(Backend.ONNX)
+
+    assert onnx_model.count_tokens(TEXTS) == torch_model.count_tokens(TEXTS)
+    cosines = np.sum(torch_model.embed(TEXTS) * onnx_model.embed(TEXTS), axis=1)
+    assert cosines.min() > 0.98, cosines
