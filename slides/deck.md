@@ -68,13 +68,13 @@ client ──▶ RequestContext (request id, access log)
 - int8 dynamic quantisation, exported for **AVX2** (the deployment CPU); the Hub's int8 file needs AVX-512 VNNI
 - 4 threads (the pod's CPU limit), ~25-token inputs
 - Fidelity vs fp32 on a small Danish/English retrieval set: **2× throughput, ¼ the size, same rankings**
-- → **int8 is the default.** Export at build time; runtime is ONNX Runtime + tokenizers, **no torch** (image 1.8 → 0.6 GB compressed). A test pins int8 ≈ fp32.
+- → **int8 is the default.** Quantised at build time; runtime is ONNX Runtime + tokenizers, **no torch** (image 1.8 → 0.6 GB compressed). A test pins int8 ≈ fp32.
 
 ---
 
 # Shipping it
 
-- **Docker**: multi-stage; int8 model exported in a build stage from a pinned revision; no torch at runtime; non-root, read-only root fs
+- **Docker**: multi-stage; int8 model quantised in a build stage from a pinned revision; no torch at runtime; non-root, read-only root fs
 - **CI** (GitHub Actions): ruff + tests → build image → **smoke-test the container** → push to GHCR on `main`
 - **CD**: GitOps on my k3s homelab: ArgoCD + image updater roll out each new digest; probes on `/health/live` and `/health/ready`
 
