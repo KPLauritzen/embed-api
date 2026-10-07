@@ -36,9 +36,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      # The image is ~4 GB and is stored twice (build cache + the copy loaded
-      # for the smoke test); the runner's ~14 GB free is not enough. These
-      # preinstalled toolchains are unused here and free ~30 GB.
+      # The model stage downloads the 2.2 GB fp32 ONNX export and writes the
+      # int8 result, on top of the build cache and the image loaded for the
+      # smoke test; the runner's ~14 GB free is tight. These preinstalled
+      # toolchains are unused here and free ~30 GB.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -66,8 +67,8 @@ jobs:
           load: true
           tags: embed-api:ci
           cache-from: type=gha
-          # mode=min: only the final image's layers are cached. The 2.2 GB model
-          # layer would otherwise crowd out everything else in the 10 GB cache.
+          # mode=min: only the final image's layers are cached, not the model
+          # stage's 2.2 GB fp32 download, which would crowd the 10 GB cache.
           cache-to: type=gha,mode=min
       - name: Smoke test
         run: scripts/smoke_test.sh embed-api:ci

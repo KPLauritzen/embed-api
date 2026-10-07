@@ -16,17 +16,16 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-# --- model: download the pinned revision, quantise to int8 ONNX ------------
-# Depends only on the two scripts (which pin the revision and the tooling), so
-# it is rebuilt only when they change. Quantising needs ~8.5 GB of RAM and the
-# 2.2 GB fp32 files; only the ~580 MB result is copied out.
+# --- model: quantise the pinned revision to int8 ONNX ----------------------
+# Depends only on the two scripts (export_onnx.py imports the pinned revision
+# from download_model.py), so it is rebuilt only when they change. Downloads
+# the 2.2 GB fp32 ONNX export, needs ~8.5 GB of RAM, and copies out only the
+# ~560 MB result.
 FROM python:3.12-slim AS model
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
 ENV UV_PYTHON_DOWNLOADS=never
 COPY scripts/download_model.py scripts/export_onnx.py /scripts/
-RUN uv run /scripts/download_model.py --dest /build/e5 \
-    && uv run /scripts/export_onnx.py --src /build/e5 --dest /models/e5-int8 \
-    && rm -rf /build /root/.cache
+RUN uv run /scripts/export_onnx.py --dest /models/e5-int8 && rm -rf /root/.cache
 
 # --- runtime ---------------------------------------------------------------
 FROM python:3.12-slim AS runtime
