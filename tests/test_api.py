@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from embeda_api.config import Settings
-from embeda_api.main import create_app
+from embed_api.config import Settings
+from embed_api.main import create_app
 from tests.conftest import FakeEmbedder
 
 

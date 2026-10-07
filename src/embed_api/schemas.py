@@ -10,7 +10,7 @@ from pydantic import (
     WithJsonSchema,
 )
 
-from embeda_api.embedder import InputType
+from embed_api.embedder import InputType
 
 # Part of the API contract, so fixed here (and shown in the OpenAPI schema)
 # rather than varying per deployment. The per-request token budget, which is

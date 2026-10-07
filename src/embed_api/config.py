@@ -8,9 +8,9 @@ DEFAULT_MODEL_REVISION = "3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3"
 
 
 class Settings(BaseSettings):
-    """Runtime configuration, read from `EMBEDA_*` environment variables."""
+    """Runtime configuration, read from `EMBED_*` environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="EMBEDA_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="EMBED_", env_file=".env", extra="ignore")
 
     model_id: str = Field(
         DEFAULT_MODEL_ID,

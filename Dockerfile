@@ -32,10 +32,12 @@ COPY --from=deps /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     HF_HUB_OFFLINE=1 \
+    # Writable even with a read-only root filesystem (/tmp is a mount).
+    HF_HOME=/tmp/huggingface \
     TRANSFORMERS_OFFLINE=1 \
     # Bounds glibc arena growth from variable-shaped tensor allocations.
     MALLOC_ARENA_MAX=2 \
-    EMBEDA_MODEL_PATH=/models/e5
+    EMBED_MODEL_PATH=/models/e5
 USER 10001
 EXPOSE 8000
-CMD ["uvicorn", "embeda_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+CMD ["uvicorn", "embed_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

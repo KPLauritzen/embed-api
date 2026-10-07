@@ -1,4 +1,4 @@
-"""Cross-lingual similarity demo against a running embeda-api.
+"""Cross-lingual similarity demo against a running embed-api.
 
     uv run python examples/demo.py [http://localhost:8000]
 

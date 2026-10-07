@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING, Protocol
 import anyio.to_thread
 import numpy as np
 
-from embeda_api.errors import APIError
+from embed_api.errors import APIError
 
 if TYPE_CHECKING:
-    from embeda_api.config import Settings
+    from embed_api.config import Settings
 
 
 class InputType(StrEnum):

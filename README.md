@@ -1,4 +1,4 @@
-# embeda-api
+# embed-api
 
 A production-minded HTTP API for the
 [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large)
@@ -32,7 +32,7 @@ ready within about 10 seconds of starting.
 ```sh
 uv sync
 uv run python scripts/download_model.py          # pinned revision -> ./models/e5
-EMBEDA_MODEL_PATH=models/e5 uv run uvicorn embeda_api.main:app --port 8000
+EMBED_MODEL_PATH=models/e5 uv run uvicorn embed_api.main:app --port 8000
 # then open http://localhost:8000/docs
 ```
 
@@ -40,8 +40,8 @@ Skipping the download step also works: the model is then fetched from the Huggin
 at startup. To try the API quickly on a small machine, point it at the small sibling model:
 
 ```sh
-EMBEDA_MODEL_ID=intfloat/multilingual-e5-small EMBEDA_MODEL_REVISION=main \
-  uv run uvicorn embeda_api.main:app --port 8000
+EMBED_MODEL_ID=intfloat/multilingual-e5-small EMBED_MODEL_REVISION=main \
+  uv run uvicorn embed_api.main:app --port 8000
 ```
 
 ### Docker
@@ -50,8 +50,8 @@ The image bundles the model at a pinned revision, so it starts without network a
 (amd64; ~4 GB).
 
 ```sh
-docker build -t embeda-api .
-docker run --rm -p 8000:8000 embeda-api
+docker build -t embed-api .
+docker run --rm -p 8000:8000 embed-api
 ```
 
 ### Tests
@@ -91,28 +91,28 @@ field (for example `["body", "input", 3]`). Everything else uses one envelope:
 
 | Status | `code` | When |
 |---|---|---|
-| 413 | `request_too_large` | Body over `EMBEDA_MAX_BODY_BYTES` |
+| 413 | `request_too_large` | Body over `EMBED_MAX_BODY_BYTES` |
 | 422 | *(FastAPI validation)* | Missing/unknown `input_type`, empty or blank text, >64 inputs, >8000 chars, extra fields |
-| 422 | `token_budget_exceeded` | Request needs more than `EMBEDA_MAX_TOTAL_TOKENS` |
+| 422 | `token_budget_exceeded` | Request needs more than `EMBED_MAX_TOTAL_TOKENS` |
 | 500 | `internal_error` | Anything unexpected; details are only in the server log |
 | 503 | `model_not_ready` / `model_load_failed` | Still loading, or loading failed |
 
 ## Configuration
 
-All settings are environment variables with the `EMBEDA_` prefix.
+All settings are environment variables with the `EMBED_` prefix.
 
 | Variable | Default | |
 |---|---|---|
-| `EMBEDA_MODEL_PATH` | *(unset)* | Load the model from a local directory (the Docker image sets this) |
-| `EMBEDA_MODEL_ID` | `intfloat/multilingual-e5-large` | Hub id, used when no path is set and reported in responses |
-| `EMBEDA_MODEL_REVISION` | pinned commit | Hub revision, for reproducible embeddings |
-| `EMBEDA_DEVICE` | auto | `cpu`, `cuda` or `mps` |
-| `EMBEDA_NUM_THREADS` | torch default | Set to the container's CPU limit (see below) |
-| `EMBEDA_ENCODE_BATCH_SIZE` | `16` | Inputs per forward pass |
-| `EMBEDA_MAX_CONCURRENT_BATCHES` | `1` | Requests running inference at once |
-| `EMBEDA_MAX_TOTAL_TOKENS` | `8192` | Token budget per request |
-| `EMBEDA_MAX_BODY_BYTES` | `1000000` | Largest accepted body |
-| `EMBEDA_LOG_LEVEL` | `INFO` | |
+| `EMBED_MODEL_PATH` | *(unset)* | Load the model from a local directory (the Docker image sets this) |
+| `EMBED_MODEL_ID` | `intfloat/multilingual-e5-large` | Hub id, used when no path is set and reported in responses |
+| `EMBED_MODEL_REVISION` | pinned commit | Hub revision, for reproducible embeddings |
+| `EMBED_DEVICE` | auto | `cpu`, `cuda` or `mps` |
+| `EMBED_NUM_THREADS` | torch default | Set to the container's CPU limit (see below) |
+| `EMBED_ENCODE_BATCH_SIZE` | `16` | Inputs per forward pass |
+| `EMBED_MAX_CONCURRENT_BATCHES` | `1` | Requests running inference at once |
+| `EMBED_MAX_TOTAL_TOKENS` | `8192` | Token budget per request |
+| `EMBED_MAX_BODY_BYTES` | `1000000` | Largest accepted body |
+| `EMBED_LOG_LEVEL` | `INFO` | |
 
 ## Design decisions
 
@@ -133,7 +133,7 @@ connections.
 
 **Thread count follows the CPU limit.** PyTorch sizes its thread pool from the host's
 cores, not the container's CPU quota. On a 12-thread node with a 4-CPU limit it would start
-12 threads and get throttled, so `EMBEDA_NUM_THREADS` is set from the limit.
+12 threads and get throttled, so `EMBED_NUM_THREADS` is set from the limit.
 
 **Logging.** Structured JSON on stdout, one access-log line per request with the request
 id, latency, input count, token count and truncation count. **Input text is never logged**:
@@ -173,13 +173,13 @@ because the ONNX tooling pins an older `transformers` than the API uses.
 ## Project layout
 
 ```
-src/embeda_api/
+src/embed_api/
   main.py       app factory, lifespan, routes
   embedder.py   Embedder protocol, sentence-transformers implementation, EmbeddingService
   schemas.py    request/response models (drive validation and the OpenAPI docs)
   logging.py    JSON logging, request-id/access-log and body-size middleware
   errors.py     error envelope and exception handlers
-  config.py     settings from EMBEDA_* environment variables
+  config.py     settings from EMBED_* environment variables
 scripts/download_model.py   fetch the pinned model revision
 tests/                      fast (fake model) and slow (real model) suites
 ```

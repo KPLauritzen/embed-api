@@ -1,6 +1,6 @@
 """Checks against the real model. Run with `uv run pytest -m slow`.
 
-Set EMBEDA_MODEL_PATH to a downloaded model (scripts/download_model.py) to
+Set EMBED_MODEL_PATH to a downloaded model (scripts/download_model.py) to
 avoid fetching from the Hub. e5 similarities cluster in 0.7-1.0, so the
 assertions compare orderings rather than absolute thresholds.
 """
@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from embeda_api.config import Settings
+from embed_api.config import Settings
 
 pytestmark = pytest.mark.slow
 
@@ -20,9 +20,9 @@ DEFAULT_PATH = Path(__file__).parent.parent / "models" / "e5"
 
 @pytest.fixture(scope="module")
 def model():
-    from embeda_api.embedder import SentenceTransformerEmbedder
+    from embed_api.embedder import SentenceTransformerEmbedder
 
-    path = os.environ.get("EMBEDA_MODEL_PATH") or (DEFAULT_PATH if DEFAULT_PATH.exists() else None)
+    path = os.environ.get("EMBED_MODEL_PATH") or (DEFAULT_PATH if DEFAULT_PATH.exists() else None)
     return SentenceTransformerEmbedder(Settings(model_path=str(path) if path else None))
 
 

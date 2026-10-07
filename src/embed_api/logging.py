@@ -15,11 +15,11 @@ from typing import Any
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from embeda_api.errors import error_response
+from embed_api.errors import error_response
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
-access_log = structlog.get_logger("embeda_api.access")
+access_log = structlog.get_logger("embed_api.access")
 
 
 def configure_logging(level: str) -> None:

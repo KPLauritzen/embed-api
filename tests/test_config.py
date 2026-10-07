@@ -1,7 +1,7 @@
 import importlib.util
 from pathlib import Path
 
-from embeda_api.config import DEFAULT_MODEL_REVISION
+from embed_api.config import DEFAULT_MODEL_REVISION
 
 
 def test_download_script_pins_the_same_revision() -> None:

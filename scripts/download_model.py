@@ -28,8 +28,8 @@ ALLOW_PATTERNS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-id", default=os.environ.get("EMBEDA_MODEL_ID", MODEL_ID))
-    parser.add_argument("--revision", default=os.environ.get("EMBEDA_MODEL_REVISION", REVISION))
+    parser.add_argument("--model-id", default=os.environ.get("EMBED_MODEL_ID", MODEL_ID))
+    parser.add_argument("--revision", default=os.environ.get("EMBED_MODEL_REVISION", REVISION))
     parser.add_argument("--dest", default="models/e5")
     args = parser.parse_args()
 

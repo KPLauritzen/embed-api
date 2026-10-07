@@ -50,13 +50,26 @@ jobs:
           tags: |
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,format=long
-      - uses: docker/build-push-action@v6
+      # Build once into the local daemon and smoke-test the real container
+      # (read-only root fs, as in Kubernetes) before anything is pushed.
+      - name: Build
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          tags: embed-api:ci
+          cache-from: type=gha
           # mode=min: only the final image's layers are cached. The 2.2 GB model
           # layer would otherwise crowd out everything else in the 10 GB cache.
-          cache-from: type=gha
           cache-to: type=gha,mode=min
+      - name: Smoke test
+        run: scripts/smoke_test.sh embed-api:ci
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

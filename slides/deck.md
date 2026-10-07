@@ -2,7 +2,7 @@
 marp: true
 theme: default
 paginate: true
-title: embeda-api
+title: embed-api
 style: |
   section { font-size: 26px; }
   h1 { font-size: 44px; }
@@ -10,7 +10,7 @@ style: |
   code { font-size: 0.9em; }
 ---
 
-# embeda-api
+# embed-api
 
 A production-minded embedding API for **multilingual-e5-large**
 
@@ -35,7 +35,7 @@ FastAPI · sentence-transformers · CPU · Docker · GitHub Actions · k3s
 - **Input validation**: pydantic schema = validation = Swagger docs. Empty/blank text, ≤64 inputs, ≤8000 chars, no unknown fields. Body-size middleware *before* parsing; token budget *after* tokenising.
 - **Error handling**: one envelope `{error: {code, message, request_id}}`; stable codes (`model_not_ready`, `token_budget_exceeded`, …); 500s hide internals.
 - **Logging**: JSON, one access line per request: latency, inputs, tokens, truncations. `X-Request-ID` on every response, log line and error. **Input text is never logged.**
-- **Good practice**: `Embedder` protocol → 31 fast tests with a fake model in <1 s, plus slow tests on the real model. Ruff, CI, typed settings via `EMBEDA_*` env vars.
+- **Good practice**: `Embedder` protocol → 31 fast tests with a fake model in <1 s, plus slow tests on the real model. Ruff, CI, typed settings via `EMBED_*` env vars.
 
 ---
 

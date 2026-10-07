@@ -8,12 +8,12 @@ import structlog
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import RedirectResponse
 
-from embeda_api import errors
-from embeda_api.config import Settings, get_settings
-from embeda_api.embedder import Embedder, EmbeddingService, SentenceTransformerEmbedder
-from embeda_api.errors import APIError, ErrorResponse
-from embeda_api.logging import BodySizeLimitMiddleware, RequestContextMiddleware, configure_logging
-from embeda_api.schemas import (
+from embed_api import errors
+from embed_api.config import Settings, get_settings
+from embed_api.embedder import Embedder, EmbeddingService, SentenceTransformerEmbedder
+from embed_api.errors import APIError, ErrorResponse
+from embed_api.logging import BodySizeLimitMiddleware, RequestContextMiddleware, configure_logging
+from embed_api.schemas import (
     MAX_CHARS,
     MAX_INPUTS,
     Embedding,
@@ -91,7 +91,7 @@ def create_app(
         task.cancel()
 
     app = FastAPI(
-        title="embeda-api",
+        title="embed-api",
         version="0.1.0",
         description=DESCRIPTION,
         lifespan=lifespan,
