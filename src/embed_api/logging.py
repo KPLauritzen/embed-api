@@ -17,7 +17,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from embed_api.errors import error_response
 
-_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
 access_log = structlog.get_logger("embed_api.access")
 
@@ -56,6 +56,8 @@ def configure_logging(level: str) -> None:
         logger.handlers = []
         logger.propagate = True
     logging.getLogger("uvicorn.access").disabled = True
+    # One INFO line per outbound HTTP call (Hub lookups by the torch backend).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class RequestContextMiddleware:
@@ -76,14 +78,14 @@ class RequestContextMiddleware:
             return
 
         supplied = dict(scope["headers"]).get(b"x-request-id", b"").decode("latin-1")
-        request_id = supplied if _REQUEST_ID.match(supplied) else uuid.uuid4().hex[:16]
+        request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex[:16]
         state = scope.setdefault("state", {})
         state["request_id"] = request_id
         state["log_fields"] = {}
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
 
-        status = 500
+        status: int | None = None
         start = time.perf_counter()
 
         async def send_with_id(message: Message) -> None:
@@ -97,7 +99,12 @@ class RequestContextMiddleware:
 
         try:
             await self.app(scope, receive, send_with_id)
+        except Exception:
+            status = 500  # sent by Starlette's outermost error middleware
+            raise
         finally:
+            if status is None:
+                status = 499  # client went away before a response (nginx's convention)
             path = scope["path"]
             if not path.startswith("/health"):  # probes would drown everything else
                 access_log.info(
@@ -130,7 +137,10 @@ class BodySizeLimitMiddleware:
 
         declared = dict(scope["headers"]).get(b"content-length")
         if declared is not None:
-            if int(declared) > self.max_bytes:
+            # uvicorn rejects a malformed header itself; other servers may not.
+            if not declared.isdigit():
+                await self._reject(scope, receive, send, 400, "Invalid Content-Length header.")
+            elif int(declared) > self.max_bytes:
                 await self._reject(scope, receive, send)
             else:
                 await self.app(scope, receive, send)
@@ -163,11 +173,18 @@ class BodySizeLimitMiddleware:
 
         await self.app(scope, replay, send)
 
-    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def _reject(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        status: int = 413,
+        message: str | None = None,
+    ) -> None:
         response = error_response(
-            413,
-            "request_too_large",
-            f"Request body exceeds {self.max_bytes} bytes.",
+            status,
+            "request_too_large" if status == 413 else "bad_request",
+            message or f"Request body exceeds {self.max_bytes} bytes.",
             scope.get("state", {}).get("request_id"),
         )
         await response(scope, receive, send)

@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import RedirectResponse
 
 from embed_api import errors
-from embed_api.config import Settings, get_settings
+from embed_api.config import DEFAULT_ONNX_PATH, Backend, Settings, get_settings
 from embed_api.embedder import Embedder, EmbeddingService, load_embedder
 from embed_api.errors import APIError, ErrorResponse
 from embed_api.logging import BodySizeLimitMiddleware, RequestContextMiddleware, configure_logging
@@ -62,21 +62,23 @@ def _load(factory: EmbedderFactory, settings: Settings) -> Embedder:
 async def _load_in_background(
     state: ModelState, factory: EmbedderFactory, settings: Settings
 ) -> None:
-    log.info(
-        "model_loading",
-        model=settings.model_id,
-        backend=settings.backend.value,
-        path=settings.model_path,
-    )
+    path = settings.model_path
+    if path is None and settings.backend is Backend.ONNX:
+        path = DEFAULT_ONNX_PATH
+    log.info("model_loading", backend=settings.backend.value, path=path or settings.model_id)
     try:
         embedder = await anyio.to_thread.run_sync(_load, factory, settings)
     except Exception:
+        # Loading reads local files and logs nothing from requests, so the full
+        # traceback (message included) is safe here and the fastest diagnosis.
         state.failed = True
         log.exception("model_load_failed")
         return
     state.service = EmbeddingService(embedder, settings)
     log.info(
         "model_ready",
+        model=embedder.model_name,
+        revision=embedder.revision,
         backend=embedder.backend,
         dimension=embedder.dimension,
         max_tokens=embedder.max_tokens,
@@ -129,7 +131,10 @@ def create_app(
         "/v1/embed",
         tags=["embeddings"],
         summary="Embed one or more texts",
-        responses={**_ERRORS, 422: {"description": "Invalid input or token budget exceeded."}},
+        responses={
+            **_ERRORS,
+            422: {"model": ErrorResponse, "description": "Invalid input or token budget exceeded."},
+        },
     )
     async def embed(body: EmbedRequest, request: Request, service: Service) -> EmbedResponse:
         result = await service.embed(body.input, body.input_type)
@@ -156,7 +161,7 @@ def create_app(
     def info(service: Service) -> InfoResponse:
         return InfoResponse(
             model=service.embedder.model_name,
-            revision=settings.model_revision,
+            revision=service.embedder.revision,
             backend=service.embedder.backend,
             dimension=service.embedder.dimension,
             limits=Limits(
@@ -168,8 +173,17 @@ def create_app(
             ),
         )
 
-    @app.get("/health/live", tags=["health"], summary="Process is up")
+    @app.get(
+        "/health/live",
+        tags=["health"],
+        summary="Process is up (and the model has not failed to load)",
+        responses={503: _ERRORS[503]},
+    )
     def live() -> HealthResponse:
+        # A failed load never recovers on its own; failing liveness lets the
+        # orchestrator restart the process instead of leaving it unready forever.
+        if state.failed:
+            raise APIError(503, "model_load_failed", "The model failed to load; see server logs.")
         return HealthResponse(status="ok")
 
     @app.get(

@@ -1,4 +1,6 @@
 import hashlib
+import io
+import logging
 import threading
 from collections.abc import Iterator
 
@@ -14,6 +16,7 @@ class FakeEmbedder:
     """Deterministic stand-in for the model: one token per word plus two special tokens."""
 
     model_name = "fake/e5"
+    revision = "fake-revision"
     backend = "fake"
     dimension = 8
     max_tokens = 16
@@ -50,6 +53,17 @@ def client(settings: Settings, fake: FakeEmbedder) -> Iterator[TestClient]:
     with TestClient(app, raise_server_exceptions=False) as client:
         _wait_until_ready(client)
         yield client
+
+
+@pytest.fixture
+def logs(client: TestClient) -> Iterator[io.StringIO]:
+    """Everything the app logs during the test, rendered exactly as in production."""
+    root = logging.getLogger()
+    handler = logging.StreamHandler(buffer := io.StringIO())
+    handler.setFormatter(root.handlers[0].formatter)
+    root.addHandler(handler)
+    yield buffer
+    root.removeHandler(handler)
 
 
 def _wait_until_ready(client: TestClient) -> None:

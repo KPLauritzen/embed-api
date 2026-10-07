@@ -1,3 +1,4 @@
+import io
 import threading
 
 import numpy as np
@@ -77,7 +78,19 @@ class TestValidation:
     def test_error_points_at_offending_item(self, client: TestClient) -> None:
         r = embed(client, {"input": ["ok", "  "], "input_type": "query"})
 
-        assert r.json()["detail"][0]["loc"] == ["body", "input", 1]
+        assert r.json()["error"]["details"][0]["loc"] == ["body", "input", 1]
+
+    def test_validation_error_uses_envelope_without_echoing_input(self, client: TestClient) -> None:
+        r = embed(
+            client,
+            {"input": "x" * 8001, "input_type": "query"},
+            headers={"X-Request-ID": "req-422"},
+        )
+
+        error = r.json()["error"]
+        assert (error["code"], error["request_id"]) == ("validation_error", "req-422")
+        assert error["details"][0]["loc"] == ["body", "input", 0]
+        assert "xxxx" not in r.text
 
     def test_token_budget(self, client: TestClient) -> None:
         # 40 inputs x 16 tokens = 640 > the fixture's budget of 512
@@ -92,6 +105,15 @@ class TestValidation:
 
         assert r.status_code == 413
         assert r.json()["error"]["code"] == "request_too_large"
+
+    def test_malformed_content_length(self, client: TestClient) -> None:
+        r = client.post(
+            "/v1/embed",
+            content=b"{}",
+            headers={"content-type": "application/json", "content-length": "abc"},
+        )
+
+        assert r.status_code == 400
 
     def test_body_too_large_when_chunked(self, client: TestClient) -> None:
         def chunks():
@@ -159,18 +181,25 @@ class TestLifecycle:
                 threading.Event().wait(0.01)
             assert r.status_code == 503
             assert r.json()["error"]["code"] == "model_load_failed"
+            # A failed load never recovers by itself, so liveness asks for a restart.
+            assert client.get("/health/live").status_code == 503
 
-    def test_unexpected_error_hides_internals(self, client: TestClient, fake: FakeEmbedder) -> None:
-        def explode(_: list[str]) -> np.ndarray:
-            raise RuntimeError("secret internal detail")
+    def test_unexpected_error_hides_internals(
+        self, client: TestClient, fake: FakeEmbedder, logs: io.StringIO
+    ) -> None:
+        def explode(texts: list[str]) -> np.ndarray:
+            raise RuntimeError(f"failed on {texts!r}")
 
         fake.embed = explode  # type: ignore[method-assign]
-        r = embed(client, {"input": "x", "input_type": "query"})
+        r = embed(client, {"input": "very-private-text", "input_type": "query"})
 
         assert r.status_code == 500
         assert r.json()["error"]["code"] == "internal_error"
-        assert "secret" not in r.text
         assert r.json()["error"]["request_id"] == r.headers["x-request-id"]
+        assert "private" not in r.text
+        logged = logs.getvalue()
+        assert '"unhandled_error"' in logged  # the failure is logged...
+        assert "very-private-text" not in logged  # ...but not the message carrying input
 
 
 def test_info(client: TestClient, settings: Settings) -> None:
@@ -188,7 +217,9 @@ def test_root_redirects_to_docs(client: TestClient) -> None:
     assert r.headers["location"] == "/docs"
 
 
-def test_input_text_is_never_logged(client: TestClient, capsys: pytest.CaptureFixture) -> None:
+def test_input_text_is_never_logged(client: TestClient, logs: io.StringIO) -> None:
     embed(client, {"input": "very-private-text", "input_type": "query"})
 
-    assert "very-private-text" not in capsys.readouterr().out
+    logged = logs.getvalue()
+    assert '"event": "request"' in logged  # the access line was captured...
+    assert "very-private-text" not in logged  # ...and carries no input

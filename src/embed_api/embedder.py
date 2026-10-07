@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -25,6 +26,7 @@ class InputType(StrEnum):
 
 class Embedder(Protocol):
     model_name: str
+    revision: str
     backend: str
     dimension: int
     max_tokens: int
@@ -44,6 +46,12 @@ class OnnxEmbedder:
     Reproduces what sentence-transformers does for e5 (tokenise, truncate to
     512, mean-pool over the attention mask, L2-normalise) without torch. The
     slow test suite checks it against the torch backend.
+
+    Texts are run through the model one at a time. Dynamic quantisation picks
+    its activation scale from the whole input tensor, so in a batch each
+    text's embedding would depend on the other texts in the request (cosine
+    ~0.994 to itself embedded alone). One at a time, a text always gets the
+    same vector, for ~5-15% less throughput (and no wasted work on padding).
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -53,16 +61,18 @@ class OnnxEmbedder:
         path = Path(settings.model_path or DEFAULT_ONNX_PATH)
         config = json.loads((path / "sentence_bert_config.json").read_text())
         self.max_tokens = int(config["max_seq_length"])
+        # Written by export_onnx.py: what the weights actually are, rather
+        # than what the settings claim.
+        source = json.loads((path / "source.json").read_text())
 
         # Two tokenizers: one untruncated, to count tokens and flag truncation,
-        # and one that truncates and pads for the model.
+        # and one that truncates for the model.
         self._counter = Tokenizer.from_file(str(path / "tokenizer.json"))
         self._counter.no_truncation()
         self._counter.no_padding()
         self._tokenizer = Tokenizer.from_file(str(path / "tokenizer.json"))
         self._tokenizer.enable_truncation(max_length=self.max_tokens)
-        pad_id = self._tokenizer.token_to_id("<pad>")
-        self._tokenizer.enable_padding(pad_id=pad_id, pad_token="<pad>")
+        self._tokenizer.no_padding()
 
         options = ort.SessionOptions()
         if settings.num_threads:
@@ -70,8 +80,8 @@ class OnnxEmbedder:
         self._session = ort.InferenceSession(
             str(path / "model.onnx"), options, providers=["CPUExecutionProvider"]
         )
-        self._batch_size = settings.encode_batch_size
-        self.model_name = settings.model_id
+        self.model_name = source["model_id"]
+        self.revision = source["revision"]
         self.backend = "onnx-int8"
         self.dimension = int(self._session.get_outputs()[0].shape[-1])
 
@@ -79,18 +89,18 @@ class OnnxEmbedder:
         return [len(encoding.ids) for encoding in self._counter.encode_batch(texts)]
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        batches = []
-        for start in range(0, len(texts), self._batch_size):
-            encodings = self._tokenizer.encode_batch(texts[start : start + self._batch_size])
-            input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
-            mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+        rows = []
+        for encoding in self._tokenizer.encode_batch(texts):
+            # One unpadded text per run, so mean pooling over all tokens is
+            # mean pooling over the attention mask.
+            input_ids = np.array([encoding.ids], dtype=np.int64)
             (hidden,) = self._session.run(
-                ["last_hidden_state"], {"input_ids": input_ids, "attention_mask": mask}
+                ["last_hidden_state"],
+                {"input_ids": input_ids, "attention_mask": np.ones_like(input_ids)},
             )
-            weights = mask[:, :, None].astype(np.float32)
-            pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
-            batches.append(pooled / np.linalg.norm(pooled, axis=1, keepdims=True))
-        return np.vstack(batches)
+            pooled = hidden[0].mean(axis=0)
+            rows.append(pooled / np.linalg.norm(pooled))
+        return np.vstack(rows).astype(np.float32)
 
 
 class SentenceTransformerEmbedder:
@@ -98,31 +108,41 @@ class SentenceTransformerEmbedder:
         # Imported here so the API (and its tests) start without loading torch.
         import torch
         from sentence_transformers import SentenceTransformer
+        from tokenizers import Tokenizer
         from transformers.utils import logging as hf_logging
 
         # The tokenizer warns on every over-long input; truncation is reported
-        # per input in the response instead.
+        # per input in the response instead. Progress bars are not JSON logs.
         hf_logging.set_verbosity_error()
+        hf_logging.disable_progress_bar()
         if settings.num_threads:
             torch.set_num_threads(settings.num_threads)
 
         if settings.model_path:
-            self._model = SentenceTransformer(settings.model_path, device=settings.device)
+            # A local directory must not fall back to (or even ask) the Hub.
+            self._model = SentenceTransformer(
+                settings.model_path, device=settings.device, local_files_only=True
+            )
         else:
             self._model = SentenceTransformer(
                 settings.model_id, revision=settings.model_revision, device=settings.device
             )
         self._batch_size = settings.encode_batch_size
         self.model_name = settings.model_id
+        self.revision = settings.model_revision
         self.backend = "torch-fp32"
         self.dimension = self._model.get_embedding_dimension()
         self.max_tokens = self._model.max_seq_length
+        # Counting gets its own tokenizer. Token counting runs outside the
+        # inference semaphore, and the transformers tokenizer reconfigures its
+        # shared backend's truncation on every call, so sharing one let a
+        # concurrent count switch truncation off mid-encode (>512 tokens -> 500).
+        self._counter = Tokenizer.from_str(self._model.tokenizer.backend_tokenizer.to_str())
+        self._counter.no_truncation()
+        self._counter.no_padding()
 
     def count_tokens(self, texts: list[str]) -> list[int]:
-        encoded = self._model.tokenizer(
-            texts, add_special_tokens=True, truncation=False, return_attention_mask=False
-        )
-        return [len(ids) for ids in encoded["input_ids"]]
+        return [len(encoding.ids) for encoding in self._counter.encode_batch(texts)]
 
     def embed(self, texts: list[str]) -> np.ndarray:
         return self._model.encode(
@@ -135,6 +155,10 @@ class SentenceTransformerEmbedder:
 
 
 def load_embedder(settings: Settings) -> Embedder:
+    if settings.num_threads:
+        # The tokenizers library has its own thread pool, sized to the host's
+        # cores unless told otherwise; it is created on first use.
+        os.environ.setdefault("RAYON_NUM_THREADS", str(settings.num_threads))
     if settings.backend is Backend.TORCH:
         return SentenceTransformerEmbedder(settings)
     return OnnxEmbedder(settings)

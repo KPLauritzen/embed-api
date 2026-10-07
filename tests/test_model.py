@@ -80,3 +80,27 @@ def test_onnx_int8_matches_torch_fp32() -> None:
     assert onnx_model.count_tokens(TEXTS) == torch_model.count_tokens(TEXTS)
     cosines = np.sum(torch_model.embed(TEXTS) * onnx_model.embed(TEXTS), axis=1)
     assert cosines.min() > 0.98, cosines
+
+
+def test_embedding_does_not_depend_on_the_rest_of_the_batch(model: Embedder) -> None:
+    # Dynamic int8 quantisation scales activations per input tensor, so a
+    # batched run would let one text's vector depend on its neighbours.
+    alone = model.embed([TEXTS[0]])[0]
+    batched = model.embed([TEXTS[0], TEXTS[2], TEXTS[4]])[0]
+
+    assert alone @ batched > 0.99999
+
+
+def test_concurrent_counting_and_encoding() -> None:
+    # Token counting runs outside the inference semaphore, concurrently with
+    # encoding. With a shared transformers tokenizer, counting could switch off
+    # truncation mid-encode and push >512 tokens into the model.
+    from concurrent.futures import ThreadPoolExecutor
+
+    model = _load(Backend.TORCH)
+    long_text = [TEXTS[4]]
+    with ThreadPoolExecutor(8) as pool:
+        counts = [pool.submit(model.count_tokens, long_text * 4) for _ in range(200)]
+        encodes = [pool.submit(model.embed, long_text) for _ in range(20)]
+        for future in counts + encodes:
+            future.result()
