@@ -53,6 +53,18 @@ uv run scripts/download_model.py                 # downloads ./models/e5 (2.2 GB
 EMBED_BACKEND=torch uv run --extra torch uvicorn embed_api.main:app --port 8000
 ```
 
+The torch backend can also serve
+[`google/embeddinggemma-2`](https://huggingface.co/google/embeddinggemma-2) (text only; its
+vision and audio encoders are not loaded). The server reads the model's `SearchQuery` and
+`Document` prompts from its `config_sentence_transformers.json` and uses them in place of
+e5's `query: ` and `passage: ` prefixes:
+
+```sh
+uv run scripts/download_model.py --model embeddinggemma-2   # ./models/embeddinggemma-2
+EMBED_BACKEND=torch EMBED_MODEL_PATH=models/embeddinggemma-2 \
+    uv run --extra torch uvicorn embed_api.main:app --port 8000
+```
+
 ### Docker
 
 ```sh

@@ -1,4 +1,5 @@
 import io
+import json
 import threading
 
 import numpy as np
@@ -42,6 +43,23 @@ class TestEmbed:
         embed(client, {"input": ["a", "b"], "input_type": input_type})
 
         assert fake.calls[-1] == [f"{input_type}: a", f"{input_type}: b"]
+
+    def test_server_uses_prompts_from_model_dir(self, tmp_path, fake: FakeEmbedder) -> None:
+        # The prompts EmbeddingGemma 2's model card lists for search.
+        prompts = {
+            "SearchQuery": "task: search result | query: ",
+            "Document": "title: none | text: ",
+        }
+        (tmp_path / "config_sentence_transformers.json").write_text(
+            json.dumps({"prompts": prompts})
+        )
+        app = create_app(Settings(model_path=str(tmp_path)), embedder_factory=lambda _: fake)
+        with TestClient(app) as client:
+            wait_until(lambda: client.get("/health/ready").status_code == 200)
+            embed(client, {"input": ["a"], "input_type": "query"})
+            embed(client, {"input": ["b"], "input_type": "passage"})
+
+        assert fake.calls[-2:] == [[prompts["SearchQuery"] + "a"], [prompts["Document"] + "b"]]
 
     def test_over_long_input_is_truncated_and_flagged(self, client: TestClient) -> None:
         long_text = " ".join(["word"] * 50)  # FakeEmbedder.max_tokens is 16

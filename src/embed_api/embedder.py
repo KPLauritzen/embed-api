@@ -50,7 +50,9 @@ def _load_tokenizer(model_dir: Path) -> tuple[Tokenizer, int]:
     """The model's fast tokenizer, truncating at the model's token limit, and that limit."""
     from tokenizers import Tokenizer
 
-    max_tokens = json.loads((model_dir / "sentence_bert_config.json").read_text())["max_seq_length"]
+    config = json.loads((model_dir / "sentence_bert_config.json").read_text())
+    # EmbeddingGemma 2 does not set it; its model card gives an 8192-token context.
+    max_tokens = config.get("max_seq_length", 8192)
     tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
     tokenizer.enable_truncation(max_length=max_tokens)
     tokenizer.no_padding()
@@ -60,6 +62,20 @@ def _load_tokenizer(model_dir: Path) -> tuple[Tokenizer, int]:
 def _count_tokens(tokenizer: Tokenizer, texts: list[str]) -> list[tuple[int, bool]]:
     # With truncation on, `ids` is what the model sees and `overflowing` holds what was cut.
     return [(len(e.ids), bool(e.overflowing)) for e in tokenizer.encode_batch(texts)]
+
+
+E5_PREFIXES = {InputType.QUERY: "query: ", InputType.PASSAGE: "passage: "}
+
+
+def read_prefixes(model_dir: Path) -> dict[InputType, str]:
+    """The prefix per input type: the model's own search prompts if its
+    config_sentence_transformers.json has them (EmbeddingGemma 2 does), else e5's."""
+    try:
+        config = json.loads((model_dir / "config_sentence_transformers.json").read_text())
+        prompts = config["prompts"]
+        return {InputType.QUERY: prompts["SearchQuery"], InputType.PASSAGE: prompts["Document"]}
+    except (FileNotFoundError, KeyError):
+        return E5_PREFIXES
 
 
 def _read_source(model_dir: Path) -> tuple[str, str]:
@@ -127,8 +143,18 @@ class SentenceTransformerEmbedder:
 
         model_dir = settings.model_dir
         self.model_name, self.revision = _read_source(model_dir)
-        self._model = SentenceTransformer(str(model_dir), local_files_only=True)
+        config = json.loads((model_dir / "config.json").read_text())
+        # EmbeddingGemma 2 has vision and audio encoders; text only needs neither.
+        text_only = {k: None for k in ("vision_config", "audio_config") if k in config}
+        self._model = SentenceTransformer(
+            str(model_dir),
+            local_files_only=True,
+            config_kwargs=text_only,
+            # EmbeddingGemma 2 ships bf16 weights; fp32 is faster on most CPUs, and fp16 is unsafe.
+            model_kwargs={"dtype": torch.float32},
+        )
         self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)  # for counting tokens
+        self._model.max_seq_length = self.max_tokens
         dimension = self._model.get_embedding_dimension()
         assert dimension is not None  # always set for a sentence-embedding model
         self.dimension = dimension
@@ -162,7 +188,7 @@ class EmbedResult:
 
 
 class EmbeddingService:
-    """Adds the e5 prefix, checks the token budget, and runs one inference at a time.
+    """Adds the model's prefix, checks the token budget, and runs one inference at a time.
 
     On a CPU, one request using every core finishes sooner than several sharing them,
     so requests queue for a single slot. They wait at most `queue_timeout_seconds` and
@@ -173,6 +199,7 @@ class EmbeddingService:
 
     def __init__(self, embedder: Embedder, settings: Settings) -> None:
         self.embedder = embedder
+        self._prefixes = read_prefixes(settings.model_dir)
         self._max_total_tokens = settings.max_total_tokens
         self._queue_timeout = settings.queue_timeout_seconds
         self._slot = asyncio.Semaphore(1)
@@ -183,7 +210,7 @@ class EmbeddingService:
         input_type: InputType,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     ) -> EmbedResult:
-        prefixed = [f"{input_type.value}: {text}" for text in texts]
+        prefixed = [self._prefixes[input_type] + text for text in texts]
 
         # Tokenising 64 texts of 8000 characters takes a while, so this runs in a thread too.
         counts = await anyio.to_thread.run_sync(self.embedder.count_tokens, prefixed)
