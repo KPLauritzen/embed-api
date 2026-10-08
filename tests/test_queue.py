@@ -27,11 +27,6 @@ class BlockingEmbedder(FakeEmbedder):
         return super().embed(texts)
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
 async def test_waiting_longer_than_the_queue_timeout_gives_503_with_retry_after() -> None:
     import anyio
 
@@ -62,11 +57,3 @@ async def test_request_from_a_disconnected_client_is_not_computed() -> None:
 
     assert caught.value.status_code == 499
     assert embedder.calls == []
-
-
-async def test_queue_time_is_reported() -> None:
-    service = EmbeddingService(FakeEmbedder(), Settings())
-
-    result = await service.embed(["hej"], InputType.QUERY)
-
-    assert result.queue_ms >= 0

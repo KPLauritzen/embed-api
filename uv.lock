@@ -97,9 +97,7 @@ torch = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "embed-api", extra = ["torch"] },
     { name = "httpx" },
-    { name = "huggingface-hub" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -122,9 +120,7 @@ provides-extras = ["torch"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "embed-api", extras = ["torch"] },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "huggingface-hub", specifier = ">=0.26" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.8" },
 ]

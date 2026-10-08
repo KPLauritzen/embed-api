@@ -1,8 +1,8 @@
 import hashlib
 import io
 import logging
-import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 
 import numpy as np
 import pytest
@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from embed_api.config import Settings
 from embed_api.main import create_app
+from embed_api.middleware import json_formatter
 
 
 class FakeEmbedder:
@@ -21,11 +22,12 @@ class FakeEmbedder:
     dimension = 8
     max_tokens = 16
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self) -> None:
         self.calls: list[list[str]] = []
 
-    def count_tokens(self, texts: list[str]) -> list[int]:
-        return [len(text.split()) + 2 for text in texts]
+    def count_tokens(self, texts: list[str]) -> list[tuple[int, bool]]:
+        counts = [len(text.split()) + 2 for text in texts]
+        return [(min(n, self.max_tokens), n > self.max_tokens) for n in counts]
 
     def embed(self, texts: list[str]) -> np.ndarray:
         self.calls.append(texts)
@@ -35,6 +37,14 @@ class FakeEmbedder:
             vector = np.random.default_rng(seed).normal(size=self.dimension)
             rows.append(vector / np.linalg.norm(vector))
         return np.array(rows, dtype=np.float32)
+
+
+def wait_until(condition: Callable[[], bool], timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError("condition never became true")
+        time.sleep(0.01)
 
 
 @pytest.fixture
@@ -50,25 +60,16 @@ def fake() -> FakeEmbedder:
 @pytest.fixture
 def client(settings: Settings, fake: FakeEmbedder) -> Iterator[TestClient]:
     app = create_app(settings, embedder_factory=lambda _: fake)
-    with TestClient(app, raise_server_exceptions=False) as client:
-        _wait_until_ready(client)
+    with TestClient(app) as client:
+        wait_until(lambda: client.get("/health/ready").status_code == 200)
         yield client
 
 
 @pytest.fixture
-def logs(client: TestClient) -> Iterator[io.StringIO]:
-    """Everything the app logs during the test, rendered exactly as in production."""
-    root = logging.getLogger()
+def logs() -> Iterator[io.StringIO]:
+    """Everything logged during the test, rendered as the app renders it."""
     handler = logging.StreamHandler(buffer := io.StringIO())
-    handler.setFormatter(root.handlers[0].formatter)
-    root.addHandler(handler)
+    handler.setFormatter(json_formatter())
+    logging.getLogger().addHandler(handler)
     yield buffer
-    root.removeHandler(handler)
-
-
-def _wait_until_ready(client: TestClient) -> None:
-    for _ in range(200):
-        if client.get("/health/ready").status_code == 200:
-            return
-        threading.Event().wait(0.01)
-    raise AssertionError("app never became ready")
+    logging.getLogger().removeHandler(handler)

@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from embed_api.config import DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, Backend, Settings
+from embed_api.config import Backend, Settings
 from embed_api.embedder import Embedder, load_embedder
 
 # (query, relevant passage) pairs; every other passage is a distractor.
@@ -57,18 +57,17 @@ SENTENCE = (
 def fp32_onnx_dir(int8_dir: Path, dest: Path) -> Path:
     """The Hub's fp32 ONNX export, laid out like the int8 directory."""
     if not (dest / "model.onnx").exists():
+        source = json.loads((int8_dir / "source.json").read_text())
         snapshot_download(
-            repo_id=DEFAULT_MODEL_ID,
-            revision=DEFAULT_MODEL_REVISION,
+            repo_id=source["model_id"],
+            revision=source["revision"],
             allow_patterns=["onnx/model.onnx", "onnx/model.onnx_data"],
             local_dir=dest,
         )
         for name in ("model.onnx", "model.onnx_data"):
             shutil.move(dest / "onnx" / name, dest / name)
-        for name in ("tokenizer.json", "sentence_bert_config.json"):
+        for name in ("tokenizer.json", "sentence_bert_config.json", "source.json"):
             shutil.copy(int8_dir / name, dest / name)
-        source = {"model_id": DEFAULT_MODEL_ID, "revision": DEFAULT_MODEL_REVISION}
-        (dest / "source.json").write_text(json.dumps(source))
     return dest
 
 

@@ -1,6 +1,6 @@
 """Truncation and the token budget, against a running embed-api.
 
-    uv run --no-dev python examples/limits.py [http://localhost:8000]
+    uv run python examples/limits.py [http://localhost:8000]
 
 Sends one over-long text (embedded, flagged `truncated`) and one request over
 the per-request token budget (rejected with 422 before any inference).

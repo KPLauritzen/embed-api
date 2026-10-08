@@ -22,7 +22,6 @@ model id and revision the weights came from. Peak memory is ~8.5 GB.
 import argparse
 import json
 import logging
-import os
 import shutil
 import sys
 import tempfile
@@ -48,12 +47,6 @@ def main() -> None:
     parser.add_argument("--dest", default="models/e5-int8")
     args = parser.parse_args()
     dest = Path(args.dest)
-
-    # download_model.py honours these overrides for the torch backend; here
-    # they would mislabel the pinned weights, so refuse rather than guess.
-    for var, pinned in (("EMBED_MODEL_ID", MODEL_ID), ("EMBED_MODEL_REVISION", REVISION)):
-        if os.environ.get(var, pinned) != pinned:
-            raise SystemExit(f"{var} is set; the export only builds the pinned {MODEL_ID}")
 
     # ORT suggests shape-inference pre-processing for static quantisation; it
     # does not apply to dynamic quantisation of a transformer.

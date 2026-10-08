@@ -37,7 +37,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     # Bounds glibc arena growth from variable-shaped allocations.
     MALLOC_ARENA_MAX=2 \
-    EMBED_BACKEND=onnx \
     EMBED_MODEL_PATH=/models/e5-int8
 USER 10001
 EXPOSE 8000

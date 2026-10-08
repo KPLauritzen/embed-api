@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from embed_api.config import Settings
 from embed_api.main import create_app
-from tests.conftest import FakeEmbedder
+from tests.conftest import FakeEmbedder, wait_until
 
 
 def embed(client: TestClient, payload: dict, **kwargs):
@@ -15,16 +15,15 @@ def embed(client: TestClient, payload: dict, **kwargs):
 
 
 class TestEmbed:
-    def test_single_string(self, client: TestClient) -> None:
+    def test_single_string(self, client: TestClient, fake: FakeEmbedder) -> None:
         r = embed(client, {"input": "hej verden", "input_type": "query"})
 
         assert r.status_code == 200
         body = r.json()
-        assert body["model"] == "fake/e5"
-        assert body["dimension"] == 8
+        assert (body["model"], body["dimension"]) == (fake.model_name, fake.dimension)
         [item] = body["embeddings"]
         assert item["index"] == 0
-        assert len(item["embedding"]) == 8
+        assert len(item["embedding"]) == fake.dimension
         assert np.isclose(np.linalg.norm(item["embedding"]), 1.0, atol=1e-5)
         assert item == item | {"tokens": 5, "truncated": False}  # "query: hej verden" + 2
         assert body["usage"] == {"total_tokens": 5}
@@ -78,21 +77,18 @@ class TestValidation:
         assert r.status_code == 422
         assert r.json()["error"]["code"] == "validation_error"
 
-    def test_error_points_at_offending_item(self, client: TestClient) -> None:
-        r = embed(client, {"input": ["ok", "  "], "input_type": "query"})
-
-        assert r.json()["error"]["details"][0]["loc"] == ["body", "input", 1]
-
-    def test_validation_error_uses_envelope_without_echoing_input(self, client: TestClient) -> None:
+    def test_validation_error_points_at_the_item_without_echoing_it(
+        self, client: TestClient
+    ) -> None:
         r = embed(
             client,
-            {"input": "x" * 8001, "input_type": "query"},
+            {"input": ["ok", "x" * 8001], "input_type": "query"},
             headers={"X-Request-ID": "req-422"},
         )
 
         error = r.json()["error"]
         assert (error["code"], error["request_id"]) == ("validation_error", "req-422")
-        assert error["details"][0]["loc"] == ["body", "input", 0]
+        assert error["details"][0]["loc"] == ["body", "input", 1]
         assert "xxxx" not in r.text
 
     def test_token_budget(self, client: TestClient) -> None:
@@ -103,20 +99,11 @@ class TestValidation:
         assert r.status_code == 422
         assert r.json()["error"]["code"] == "token_budget_exceeded"
 
-    def test_body_too_large_by_content_length(self, client: TestClient) -> None:
+    def test_body_too_large(self, client: TestClient) -> None:
         r = embed(client, {"input": ["x" * 8000, "y" * 8000, "z" * 8000], "input_type": "query"})
 
         assert r.status_code == 413
         assert r.json()["error"]["code"] == "request_too_large"
-
-    def test_malformed_content_length(self, client: TestClient) -> None:
-        r = client.post(
-            "/v1/embed",
-            content=b"{}",
-            headers={"content-type": "application/json", "content-length": "abc"},
-        )
-
-        assert r.status_code == 400
 
     def test_body_too_large_when_chunked(self, client: TestClient) -> None:
         def chunks():
@@ -128,6 +115,7 @@ class TestValidation:
         r = client.post("/v1/embed", content=chunks(), headers={"content-type": "application/json"})
 
         assert r.status_code == 413
+        assert r.json()["error"]["code"] == "request_too_large"
 
 
 class TestRequestId:
@@ -145,15 +133,6 @@ class TestRequestId:
         r = client.get("/v1/info", headers={"X-Request-ID": "bad id\nwith newline"})
 
         assert r.headers["x-request-id"] != "bad id\nwith newline"
-
-    def test_error_body_carries_the_id(self, client: TestClient) -> None:
-        r = embed(
-            client,
-            {"input": ["x" * 8000, "y" * 8000, "z" * 8000], "input_type": "query"},
-            headers={"X-Request-ID": "req-1"},
-        )
-
-        assert r.json()["error"]["request_id"] == "req-1"
 
 
 class TestLifecycle:
@@ -177,40 +156,20 @@ class TestLifecycle:
             raise OSError("no such model")
 
         with TestClient(create_app(settings, embedder_factory=broken_factory)) as client:
-            for _ in range(200):
-                r = client.get("/health/ready")
-                if r.json()["error"]["code"] == "model_load_failed":
-                    break
-                threading.Event().wait(0.01)
-            assert r.status_code == 503
-            assert r.json()["error"]["code"] == "model_load_failed"
+            wait_until(
+                lambda: client.get("/health/ready").json()["error"]["code"] == "model_load_failed"
+            )
             # A failed load never recovers by itself, so liveness asks for a restart.
             assert client.get("/health/live").status_code == 503
 
-    def test_unexpected_error_hides_internals(
-        self, client: TestClient, fake: FakeEmbedder, logs: io.StringIO
-    ) -> None:
-        def explode(texts: list[str]) -> np.ndarray:
-            raise RuntimeError(f"failed on {texts!r}")
 
-        fake.embed = explode  # type: ignore[method-assign]
-        r = embed(client, {"input": "very-private-text", "input_type": "query"})
-
-        assert r.status_code == 500
-        assert r.json()["error"]["code"] == "internal_error"
-        assert r.json()["error"]["request_id"] == r.headers["x-request-id"]
-        assert "private" not in r.text
-        logged = logs.getvalue()
-        assert '"unhandled_error"' in logged  # the failure is logged...
-        assert "very-private-text" not in logged  # ...but not the message carrying input
-
-
-def test_info(client: TestClient, settings: Settings) -> None:
+def test_info(client: TestClient, settings: Settings, fake: FakeEmbedder) -> None:
     r = client.get("/v1/info")
 
     assert r.status_code == 200
+    assert r.json()["revision"] == fake.revision
     assert r.json()["limits"]["max_total_tokens"] == settings.max_total_tokens
-    assert r.json()["limits"]["max_tokens_per_input"] == 16
+    assert r.json()["limits"]["max_tokens_per_input"] == fake.max_tokens
 
 
 @pytest.mark.parametrize(

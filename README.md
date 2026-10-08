@@ -26,30 +26,24 @@ Swagger docs are at **`/docs`** once the server is running.
 downloads 2.2 GB and needs ~8.5 GB of free RAM for about a minute; serving peaks at ~1.5 GB.
 
 ```sh
-uv sync --no-dev                                 # the API: ONNX Runtime, no torch
+uv sync                                          # the API (ONNX Runtime, no torch) + test tools
 uv run scripts/export_onnx.py                    # pinned revision -> int8 ./models/e5-int8
-uv run --no-dev uvicorn embed_api.main:app --port 8000          # ready in ~2 s
+uv run uvicorn embed_api.main:app --port 8000    # ready in ~2 s
 # then open http://localhost:8000/docs, or in another shell:
-uv run --no-dev python examples/demo.py http://localhost:8000   # DA/EN/DE similarity
-uv run --no-dev python examples/limits.py http://localhost:8000 # truncation, token budget
+uv run python examples/demo.py http://localhost:8000     # DA/EN/DE similarity
+uv run python examples/limits.py http://localhost:8000   # truncation, token budget
 ```
-
-(`--no-dev` matters on `uv run` too: without it, uv installs the dev group, torch included.)
 
 The scripts carry their own dependencies (PEP 723), so the export tooling never enters
 the API's environment. Downloads print a "sending unauthenticated requests to the HF Hub"
 warning; it is harmless (set `HF_TOKEN` to silence it).
 
-**The PyTorch backend** serves the original fp32 model. It is the reference the int8 model
-is tested against, and the quickest way to try a smaller e5 model. Plain `uv sync` installs
-it, along with the test and lint tools:
+**The PyTorch backend** serves the original fp32 model, the reference the int8 model is
+tested against. It needs the `torch` extra:
 
 ```sh
-uv sync
 uv run scripts/download_model.py                 # pinned fp32 revision -> ./models/e5 (2.2 GB)
-EMBED_BACKEND=torch EMBED_MODEL_PATH=models/e5 uv run uvicorn embed_api.main:app --port 8000
-EMBED_BACKEND=torch EMBED_MODEL_ID=intfloat/multilingual-e5-small EMBED_MODEL_REVISION=main \
-  uv run uvicorn embed_api.main:app --port 8000   # downloads ~470 MB at startup
+EMBED_BACKEND=torch uv run --extra torch uvicorn embed_api.main:app --port 8000
 ```
 
 ### Docker
@@ -70,7 +64,7 @@ then pushes that same image to GHCR.
 
 ```sh
 uv run pytest              # fast suite (fake model, <1 s), runs in CI
-uv run pytest -m slow      # real models in ./models: both backends, int8 vs fp32, batch invariance
+uv run --extra torch pytest -m slow   # real models: both backends, int8 vs fp32, batch invariance
 uv run ruff check && uv run ruff format --check
 ```
 
@@ -129,13 +123,8 @@ All settings are environment variables with the `EMBED_` prefix.
 | Variable | Default | |
 |---|---|---|
 | `EMBED_BACKEND` | `onnx` | `onnx` (int8, default) or `torch` (fp32 reference) |
-| `EMBED_MODEL_PATH` | `models/e5-int8` for onnx | Local model directory. For torch, unset means download `EMBED_MODEL_ID` |
-| `EMBED_MODEL_ID` | `intfloat/multilingual-e5-large` | torch: Hub id and the name reported (onnx reports what the export recorded) |
-| `EMBED_MODEL_REVISION` | pinned commit | torch: Hub revision |
-| `EMBED_DEVICE` | auto | torch only: `cpu`, `cuda` or `mps` |
+| `EMBED_MODEL_PATH` | `models/e5-int8` (onnx), `models/e5` (torch) | Model directory |
 | `EMBED_NUM_THREADS` | runtime default | Inference and tokenizer threads; set to the container's CPU limit |
-| `EMBED_ENCODE_BATCH_SIZE` | `16` | torch only: inputs per forward pass |
-| `EMBED_MAX_CONCURRENT_BATCHES` | `1` | Requests running inference at once |
 | `EMBED_QUEUE_TIMEOUT_SECONDS` | `30` | Longest wait for inference before `503 overloaded` |
 | `EMBED_MAX_TOTAL_TOKENS` | `8192` | Token budget per request |
 | `EMBED_MAX_BODY_BYTES` | `1000000` | Largest accepted body |
@@ -145,12 +134,12 @@ All settings are environment variables with the `EMBED_` prefix.
 
 **Inference stays off the event loop.** Encoding is CPU-bound and blocking. It runs in a
 worker thread, so `/health/*` keeps answering while a large request is being embedded. A
-semaphore lets one request run inference at a time (configurable): on CPU, one request
+semaphore lets one request run inference at a time: on CPU, one request
 using every core beats several competing for them.
 
 **Bounded queue, and abandoned requests are dropped.** A request waits at most
 `EMBED_QUEUE_TIMEOUT_SECONDS` for that semaphore, then gets `503 overloaded` with a
-`Retry-After` estimated from recent inference times. uvicorn does not cancel a handler when
+`Retry-After` of the same length. uvicorn does not cancel a handler when
 its client disconnects, so a request whose client has gone by the time it reaches the front
 of the queue is dropped (logged as 499) instead of computed; otherwise timeouts and retries
 pile up in front of live requests. Measured: after five clients abandon full-budget requests,
@@ -158,7 +147,8 @@ a new one-text request now waits 7.9 s (the one request already computing) inste
 The access log records each request's `queue_ms`.
 
 **Bounded work per request.** Pydantic limits (64 inputs, 8000 characters each) only apply
-after the body has been read, so a middleware rejects oversized bodies first. The limit
+after the body has been read, so a middleware counts bytes as they arrive and stops at
+`EMBED_MAX_BODY_BYTES` with 413, whether or not the client sent a Content-Length. The limit
 that actually bounds CPU time and memory is the **token budget**: a full 8192-token request
 takes ~8 s on 4 cores of the benchmark machine (9.9 s on the deployment node), and 64 × 512
 tokens would take four times that.
@@ -198,9 +188,9 @@ for that request and in every error body.
 
 **Reproducible model.** The revision is pinned in one place, and only the files needed are
 downloaded; the model repository also carries a `.bin` duplicate, ONNX and OpenVINO exports,
-~9.5 GB in all. The export records the model id and revision it was built from, and
-`/v1/info` reports those (as does the torch backend for a directory from
-`download_model.py`).
+~9.5 GB in all. Both backends load a local model directory, and the script that built it
+records the model id and revision in `source.json`, which `/v1/info` reports: what is
+actually loaded, not what a setting claims.
 
 **Testable without the model.** The API depends on a small `Embedder` protocol. The fast
 suite uses a deterministic fake and covers the HTTP contract in under a second; a separate
@@ -224,7 +214,8 @@ Where the speed comes from: for a single text, ONNX Runtime alone halves latency
 cuts it by another ~40%. For 32 texts the fp32 ONNX row loses its edge because it runs one
 text at a time (the same code path as int8), so the 1.8× throughput there is int8's. Twelve
 pairs make the fidelity numbers a sanity check, not an evaluation. Rerun with
-`uv run python scripts/benchmark.py --threads 4` (it downloads the fp32 ONNX file once).
+`uv run --extra torch python scripts/benchmark.py --threads 4` (it downloads the fp32 ONNX
+file once).
 
 ## Deployment
 
@@ -243,11 +234,11 @@ src/embed_api/
   main.py       app factory, lifespan, routes
   embedder.py   Embedder protocol, ONNX and PyTorch backends, EmbeddingService
   schemas.py    request/response models (drive validation and the OpenAPI docs)
-  logging.py    JSON logging, request-id/access-log and body-size middleware
+  middleware.py JSON logging, request id + access log, body-size limit
   errors.py     error envelope and exception handlers
   config.py     settings from EMBED_* environment variables
 scripts/export_onnx.py      build the int8 ONNX model from the pinned revision
-scripts/download_model.py   fetch the pinned fp32 model (torch backend); pins the revision
+scripts/download_model.py   fetch the pinned fp32 model (torch backend); the one place the revision is pinned
 scripts/benchmark.py        speed and fidelity of the backends
 scripts/smoke_test.sh       run the built image and check it embeds (CI)
 examples/demo.py            cross-lingual similarity demo

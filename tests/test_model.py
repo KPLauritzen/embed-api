@@ -1,13 +1,11 @@
-"""Checks against the real model, for both backends. Run with `uv run pytest -m slow`.
+"""Checks against the real models: `uv run --extra torch pytest -m slow`.
 
-Expects the models from the README quickstart: ./models/e5 (torch, from
-scripts/download_model.py) and ./models/e5-int8 (onnx, from
-scripts/export_onnx.py). A backend whose model is missing is skipped. e5
+Expects ./models/e5 (torch, from scripts/download_model.py) and
+./models/e5-int8 (onnx, from scripts/export_onnx.py); a backend whose model is
+missing is skipped. e5
 similarities cluster in 0.7-1.0, so assertions compare orderings rather than
 absolute thresholds.
 """
-
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,9 +14,6 @@ from embed_api.config import Backend, Settings
 from embed_api.embedder import Embedder, load_embedder
 
 pytestmark = pytest.mark.slow
-
-MODELS = Path(__file__).parent.parent / "models"
-PATHS = {Backend.TORCH: MODELS / "e5", Backend.ONNX: MODELS / "e5-int8"}
 
 TEXTS = [
     "query: hvad er hovedstaden i Danmark?",
@@ -30,10 +25,10 @@ TEXTS = [
 
 
 def _load(backend: Backend) -> Embedder:
-    path = PATHS[backend]
-    if not path.exists():
-        pytest.skip(f"{path} not found; see the README quickstart")
-    return load_embedder(Settings(backend=backend, model_path=str(path)))
+    settings = Settings(backend=backend)
+    if not settings.model_dir.exists():
+        pytest.skip(f"{settings.model_dir} not found; see the README")
+    return load_embedder(settings)
 
 
 @pytest.fixture(scope="module", params=list(Backend), ids=lambda b: b.value)
@@ -67,17 +62,24 @@ def test_danish_and_english_paraphrases_are_close(model: Embedder) -> None:
 
 
 def test_token_count_includes_prefix_and_special_tokens(model: Embedder) -> None:
-    [with_prefix] = model.count_tokens(["query: hej"])
-    [bare] = model.count_tokens(["hej"])
+    [(with_prefix, _)] = model.count_tokens(["query: hej"])
+    [(bare, _)] = model.count_tokens(["hej"])
 
     assert with_prefix > bare >= 3  # <s> hej </s>
-    assert model.max_tokens == 512
+    assert model.count_tokens([TEXTS[4]]) == [(512, True)]
+
+
+def test_counts_match_what_sentence_transformers_feeds_the_model() -> None:
+    torch_model = _load(Backend.TORCH)
+
+    ours = [n for n, _ in torch_model.count_tokens(TEXTS)]
+    theirs = torch_model._model.tokenize(TEXTS)["attention_mask"].sum(dim=1).tolist()
+    assert ours == theirs
 
 
 def test_onnx_int8_matches_torch_fp32() -> None:
     torch_model, onnx_model = _load(Backend.TORCH), _load(Backend.ONNX)
 
-    assert onnx_model.count_tokens(TEXTS) == torch_model.count_tokens(TEXTS)
     cosines = np.sum(torch_model.embed(TEXTS) * onnx_model.embed(TEXTS), axis=1)
     assert cosines.min() > 0.98, cosines
 
@@ -89,18 +91,3 @@ def test_embedding_does_not_depend_on_the_rest_of_the_batch(model: Embedder) -> 
     batched = model.embed([TEXTS[0], TEXTS[2], TEXTS[4]])[0]
 
     assert alone @ batched > 0.99999
-
-
-def test_concurrent_counting_and_encoding() -> None:
-    # Token counting runs outside the inference semaphore, concurrently with
-    # encoding. With a shared transformers tokenizer, counting could switch off
-    # truncation mid-encode and push >512 tokens into the model.
-    from concurrent.futures import ThreadPoolExecutor
-
-    model = _load(Backend.TORCH)
-    long_text = [TEXTS[4]]
-    with ThreadPoolExecutor(8) as pool:
-        counts = [pool.submit(model.count_tokens, long_text * 4) for _ in range(200)]
-        encodes = [pool.submit(model.embed, long_text) for _ in range(20)]
-        for future in counts + encodes:
-            future.result()

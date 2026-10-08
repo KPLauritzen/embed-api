@@ -2,19 +2,16 @@
 # requires-python = ">=3.12"
 # dependencies = ["huggingface-hub==1.33.0"]
 # ///
-"""Download the pinned model revision to a local directory.
+"""Download the pinned fp32 model for the torch backend (models/e5, 2.2 GB).
 
-Only the files the sentence-transformers path needs are fetched (the torch
-backend loads them directly; scripts/export_onnx.py turns them into the int8
-model the default backend uses). The
-Hugging Face repo also carries a .bin copy, ONNX and OpenVINO exports (~9.5 GB
-in total). The model is loaded from this directory by path, which works offline
-without relying on the Hugging Face cache layout.
+This file is also the one place the model and its revision are pinned;
+export_onnx.py imports them from here. Only the files sentence-transformers
+loads are fetched: the repository also has a .bin copy and ONNX and OpenVINO
+exports (~9.5 GB in all).
 """
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
@@ -36,24 +33,16 @@ ALLOW_PATTERNS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    model_id = os.environ.get("EMBED_MODEL_ID", MODEL_ID)
-    # The pinned commit belongs to the pinned model; another model defaults to main.
-    revision = os.environ.get("EMBED_MODEL_REVISION", REVISION if model_id == MODEL_ID else "main")
-    parser.add_argument("--model-id", default=model_id)
-    parser.add_argument("--revision", default=revision)
     parser.add_argument("--dest", default="models/e5")
-    args = parser.parse_args()
+    dest = Path(parser.parse_args().dest)
 
-    path = snapshot_download(
-        repo_id=args.model_id,
-        revision=args.revision,
-        allow_patterns=ALLOW_PATTERNS,
-        local_dir=args.dest,
+    snapshot_download(
+        repo_id=MODEL_ID, revision=REVISION, allow_patterns=ALLOW_PATTERNS, local_dir=dest
     )
-    # Recorded so the server reports what it actually loaded, not its settings.
-    source = {"model_id": args.model_id, "revision": args.revision}
-    (Path(path) / "source.json").write_text(json.dumps(source, indent=2) + "\n")
-    print(path)
+    # The server reports this as the model it loaded (/v1/info).
+    source = {"model_id": MODEL_ID, "revision": REVISION}
+    (dest / "source.json").write_text(json.dumps(source, indent=2) + "\n")
+    print(dest)
 
 
 if __name__ == "__main__":

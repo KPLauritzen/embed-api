@@ -9,10 +9,14 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import RedirectResponse
 
 from embed_api import errors
-from embed_api.config import DEFAULT_ONNX_PATH, Backend, Settings, get_settings
+from embed_api.config import Settings
 from embed_api.embedder import Embedder, EmbeddingService, load_embedder
 from embed_api.errors import APIError, ErrorResponse
-from embed_api.logging import BodySizeLimitMiddleware, RequestContextMiddleware, configure_logging
+from embed_api.middleware import (
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+    configure_logging,
+)
 from embed_api.schemas import (
     MAX_CHARS,
     MAX_INPUTS,
@@ -57,6 +61,10 @@ class ModelState:
         self.failed = False
 
 
+def _load_failed() -> APIError:
+    return APIError(503, "model_load_failed", "The model failed to load; see server logs.")
+
+
 def _load(factory: EmbedderFactory, settings: Settings) -> Embedder:
     embedder = factory(settings)
     embedder.embed(["query: warm-up"])  # first call pays one-off allocation costs
@@ -66,10 +74,7 @@ def _load(factory: EmbedderFactory, settings: Settings) -> Embedder:
 async def _load_in_background(
     state: ModelState, factory: EmbedderFactory, settings: Settings
 ) -> None:
-    path = settings.model_path
-    if path is None and settings.backend is Backend.ONNX:
-        path = DEFAULT_ONNX_PATH
-    log.info("model_loading", backend=settings.backend.value, path=path or settings.model_id)
+    log.info("model_loading", backend=settings.backend.value, path=str(settings.model_dir))
     try:
         embedder = await anyio.to_thread.run_sync(_load, factory, settings)
     except Exception:
@@ -93,15 +98,14 @@ def create_app(
     settings: Settings | None = None,
     embedder_factory: EmbedderFactory = load_embedder,
 ) -> FastAPI:
-    settings = settings or get_settings()
+    settings = settings or Settings()
     configure_logging(settings.log_level)
     state = ModelState()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # Loading takes seconds (tens for torch). Doing it in the background lets the
-        # server answer straight away: liveness passes, readiness reports 503
-        # until the model is warm, and orchestrators can tell the two apart.
+        # Loading in the background lets the server answer straight away:
+        # liveness passes, readiness reports 503 until the model is warm.
         task = asyncio.create_task(_load_in_background(state, embedder_factory, settings))
         yield
         task.cancel()
@@ -122,7 +126,7 @@ def create_app(
         if state.service is not None:
             return state.service
         if state.failed:
-            raise APIError(503, "model_load_failed", "The model failed to load; see server logs.")
+            raise _load_failed()
         raise APIError(503, "model_not_ready", "The model is still loading. Retry shortly.")
 
     Service = Annotated[EmbeddingService, Depends(get_service)]
@@ -185,10 +189,10 @@ def create_app(
         responses={503: _ERRORS[503]},
     )
     def live() -> HealthResponse:
-        # A failed load never recovers on its own; failing liveness lets the
-        # orchestrator restart the process instead of leaving it unready forever.
+        # A failed load never recovers on its own; failing liveness gets the
+        # process restarted instead of leaving it unready forever.
         if state.failed:
-            raise APIError(503, "model_load_failed", "The model failed to load; see server logs.")
+            raise _load_failed()
         return HealthResponse(status="ok")
 
     @app.get(
