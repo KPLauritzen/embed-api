@@ -20,8 +20,7 @@ jobs:
           enable-cache: true
       - uses: extractions/setup-just@v3
       - run: uv sync --locked
-      # Lint, format check, type check and fast tests: the same command as locally.
-      # The slow tests need the real models and run locally (`just test-slow`).
+      # The slow tests need the real models and only run locally (`just test-slow`).
       - run: just check
 
   # Build after `check` passes. Pull requests build and discard the image, so a

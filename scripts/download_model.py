@@ -2,12 +2,11 @@
 # requires-python = ">=3.12"
 # dependencies = ["huggingface-hub==1.33.0"]
 # ///
-"""Download the pinned fp32 model for the torch backend (models/e5, 2.2 GB).
+"""Download the pinned fp32 model for the torch backend to models/e5 (2.2 GB).
 
-This file is also the one place the model and its revision are pinned;
-export_onnx.py imports them from here. Only the files sentence-transformers
-loads are fetched: the repository also has a .bin copy and ONNX and OpenVINO
-exports (~9.5 GB in all).
+The model id and revision are pinned here, and export_onnx.py imports them.
+Only the files sentence-transformers loads are downloaded; the full repository,
+with a .bin copy and ONNX and OpenVINO exports, is about 9.5 GB.
 """
 
 import argparse
@@ -39,7 +38,7 @@ def main() -> None:
     snapshot_download(
         repo_id=MODEL_ID, revision=REVISION, allow_patterns=ALLOW_PATTERNS, local_dir=dest
     )
-    # The server reports this as the model it loaded (/v1/info).
+    # /v1/info reports this as the loaded model.
     source = {"model_id": MODEL_ID, "revision": REVISION}
     (dest / "source.json").write_text(json.dumps(source, indent=2) + "\n")
     print(dest)

@@ -12,9 +12,8 @@ from pydantic import (
 
 from embed_api.embedder import InputType
 
-# Part of the API contract, so fixed here (and shown in the OpenAPI schema)
-# rather than varying per deployment. The per-request token budget, which is
-# what actually bounds inference cost, is configurable.
+# Fixed limits that are part of the API contract and appear in the OpenAPI schema.
+# The token budget, which is what bounds the cost of a request, is a setting.
 MAX_INPUTS = 64
 MAX_CHARS = 8000
 
@@ -55,8 +54,8 @@ class EmbedRequest(BaseModel):
         },
     )
 
-    # A single string is wrapped in a list before validation, so both shapes
-    # share one set of rules and errors point at `input[i]`, not at a union branch.
+    # A single string becomes a one-item list before validation, so both forms follow the
+    # same rules and an error points at input[i].
     input: Annotated[
         list[Text],
         BeforeValidator(_as_list),
@@ -76,22 +75,24 @@ class EmbedRequest(BaseModel):
         ),
     ] = Field(
         description=f"One text, or a list of up to {MAX_INPUTS} texts of at most {MAX_CHARS} "
-        "characters each. Do not add the `query: `/`passage: ` prefix yourself."
+        "characters each. Send the text without the `query: ` or `passage: ` prefix."
     )
     input_type: InputType = Field(
-        description="`query` for search queries and for symmetric tasks (similarity, "
-        "clustering); `passage` for documents being searched. The server adds the "
-        "prefix e5 was trained with. Required, because a wrong default silently "
-        "lowers retrieval quality."
+        description="`query` for search queries and for symmetric tasks such as similarity "
+        "or clustering; `passage` for the documents being searched. The server adds the "
+        "matching e5 prefix. There is no default, because the wrong prefix gives worse "
+        "results without any error."
     )
 
 
 class Embedding(BaseModel):
     index: int = Field(description="Position of the input this embedding belongs to.")
-    embedding: list[float] = Field(description="L2-normalised: cosine similarity = dot product.")
+    embedding: list[float] = Field(
+        description="L2-normalised, so cosine similarity is the dot product."
+    )
     tokens: int = Field(description="Tokens embedded, including the prefix and special tokens.")
     truncated: bool = Field(
-        description="True if the input exceeded the model's token limit and only its "
+        description="True if the text was longer than the model's limit and only its "
         "beginning was embedded."
     )
 

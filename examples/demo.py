@@ -1,9 +1,10 @@
-"""Cross-lingual similarity demo against a running embed-api.
+"""Similarity across languages, against a running embed-api.
 
     uv run python examples/demo.py [http://localhost:8000]
 
-Embeds a few Danish, English and German sentences and prints their cosine
-similarity matrix: translations land close together, unrelated topics do not.
+Embeds the same sentences in Danish, English and German, plus one unrelated
+sentence, and prints the cosine similarity of every pair. Translations score
+close to each other; the unrelated sentence does not.
 """
 
 import json

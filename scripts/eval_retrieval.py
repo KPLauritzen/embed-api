@@ -1,18 +1,18 @@
-"""Retrieval quality of the served int8 model against the fp32 original, on MTEB tasks.
+"""Retrieval quality of the int8 model and the fp32 model on Danish MTEB tasks.
 
     just eval     # = uv run --extra torch --with datasets python scripts/eval_retrieval.py
 
-Embeds each task's corpus ("passage: ") and queries ("query: ") with both
-backends, through the same embedder classes the API uses, ranks the corpus by
-cosine similarity, and reports nDCG@10 (MTEB's main retrieval metric) and
-Recall@10. Also reports how often the two backends agree on the top-1 document.
+For each task, embeds the corpus with the "passage: " prefix and the queries with
+"query: ", using both backends through the API's own embedder classes, ranks the
+corpus by cosine similarity, and reports nDCG@10, Recall@10, and how often the two
+backends rank the same document first.
 
-nDCG@10 is averaged over the queries that have a relevant document. MTEB
-averages over every query that has a judgement, counting one whose judgements
-are all "not relevant" as 0; DanFEVER has 3,271 such queries, which halves its
-MTEB number. Both are reported; the second reproduces the official `mteb`
-package. The two
-Danish tasks are small enough for a CPU (~10-15 minutes for both backends).
+The first nDCG@10 column averages over queries that have a relevant document.
+MTEB averages over every query in the relevance judgements, and a query whose
+judgements are all "not relevant" scores 0. DanFEVER has 3,271 such queries, so
+its MTEB score is about half. The second column uses MTEB's convention and gives
+the same fp32 scores as the official mteb package. Both tasks together take
+10-15 minutes on a CPU.
 """
 
 import argparse
@@ -98,7 +98,8 @@ def main() -> None:
             order = np.take_along_axis(scores, top, axis=1).argsort(axis=1)[:, ::-1]
             tops[backend] = np.take_along_axis(top, order, axis=1)
             m = evaluate(tops[backend], doc_ids, query_ids, relevant)
-            mteb = m["ndcg@10"] * len(query_ids) / n_judged  # all-irrelevant queries count 0
+            # MTEB's convention: queries without a relevant document count as 0.
+            mteb = m["ndcg@10"] * len(query_ids) / n_judged
             agree = np.mean(tops[backend][:, 0] == tops[Backend.TORCH][:, 0])
             print(
                 f"| {repo.split('/')[1]} ({len(query_ids)} queries) | {model.backend} "

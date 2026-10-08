@@ -28,7 +28,7 @@ def post(payload: dict) -> tuple[int, dict]:
 
 
 def main() -> None:
-    long_text = "Dette er en lang tekst. " * 300  # ~1800 tokens, over the 512 limit
+    long_text = "Dette er en lang tekst. " * 300  # about 1800 tokens; the limit is 512
     status, body = post({"input": [long_text, "En kort tekst."], "input_type": "passage"})
     print(f"over-long input -> {status}")
     for item in body["embeddings"]:

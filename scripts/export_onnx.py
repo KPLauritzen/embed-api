@@ -2,21 +2,20 @@
 # requires-python = ">=3.12"
 # dependencies = ["onnxruntime==1.30.0", "onnx==1.23.2", "huggingface-hub==1.33.0"]
 # ///
-"""Build the int8 ONNX model the default backend serves.
+"""Build the int8 ONNX model that the API serves, in models/e5-int8.
 
-    uv run scripts/export_onnx.py --dest models/e5-int8
+    uv run scripts/export_onnx.py
 
-Downloads the fp32 ONNX export that the Hugging Face repo ships at the pinned
-revision (2.2 GB) and quantises it with ONNX Runtime's dynamic quantiser, using
-the settings of sentence-transformers' `export_dynamic_quantized_onnx_model(
-model, "avx2")` (optimum's AVX2 config: uint8, per-channel, symmetric weights,
-full range). No torch or optimum needed; exporting from PyTorch needs more
-memory than a CI runner has. The Hub's own int8 file targets AVX-512 VNNI,
-which loses accuracy on CPUs without it; the deployment CPU has AVX2.
+Downloads the fp32 ONNX export from the model repository at the pinned revision
+(2.2 GB) and quantises it with ONNX Runtime's dynamic quantisation. The settings
+are those of sentence-transformers' `export_dynamic_quantized_onnx_model(model,
+"avx2")`: uint8, per-channel, symmetric weights, full range. This needs neither
+torch nor optimum, and less memory than exporting from PyTorch, which does not fit
+on a CI runner. The repository's own int8 file is built for AVX-512 VNNI, which
+the deployment CPU does not have.
 
-Writes only what the ONNX backend loads: `model.onnx` (~560 MB),
-`tokenizer.json`, `sentence_bert_config.json`, and `source.json` recording the
-model id and revision the weights came from. Peak memory is ~8.5 GB.
+Writes model.onnx (about 560 MB), tokenizer.json, sentence_bert_config.json, and
+source.json with the model id and revision. Needs about 8.5 GB of RAM.
 """
 
 import argparse
@@ -31,7 +30,7 @@ from huggingface_hub import snapshot_download
 from onnxruntime.quantization import QuantType, quantize_dynamic
 
 sys.path.insert(0, str(Path(__file__).parent))
-from download_model import MODEL_ID, REVISION  # one place pins the revision
+from download_model import MODEL_ID, REVISION
 
 FILES = [
     "onnx/model.onnx",
@@ -48,15 +47,14 @@ def main() -> None:
     args = parser.parse_args()
     dest = Path(args.dest)
 
-    # ORT suggests shape-inference pre-processing for static quantisation; it
-    # does not apply to dynamic quantisation of a transformer.
+    # Hides ONNX Runtime's advice to pre-process the model, which is for static quantisation.
     logging.getLogger().setLevel(logging.ERROR)
 
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp)
         snapshot_download(repo_id=MODEL_ID, revision=REVISION, allow_patterns=FILES, local_dir=src)
 
-        # The ONNX backend computes mean pooling itself; refuse anything else.
+        # The ONNX backend implements mean pooling only.
         pooling = json.loads((src / "1_Pooling" / "config.json").read_text())
         if not pooling.get("pooling_mode_mean_tokens"):
             raise SystemExit(f"expected mean pooling, got {pooling}")

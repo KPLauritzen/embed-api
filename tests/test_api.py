@@ -197,5 +197,5 @@ def test_input_text_is_never_logged(client: TestClient, logs: io.StringIO) -> No
     embed(client, {"input": "very-private-text", "input_type": "query"})
 
     logged = logs.getvalue()
-    assert '"event": "request"' in logged  # the access line was captured...
-    assert "very-private-text" not in logged  # ...and carries no input
+    assert '"event": "request"' in logged  # shows the log was captured at all
+    assert "very-private-text" not in logged

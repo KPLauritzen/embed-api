@@ -60,6 +60,6 @@ def test_unexpected_error_is_answered_and_logged_without_its_message(
     assert r.json()["error"]["code"] == "internal_error"
     assert "private" not in r.text
     logged = logs.getvalue()
-    assert '"unhandled_error"' in logged  # logged once, by the app...
-    assert "very-private-text" not in logged  # ...without the message carrying the input
-    assert "Exception in ASGI application" not in logged  # and never re-raised to uvicorn
+    assert '"unhandled_error"' in logged
+    assert "very-private-text" not in logged
+    assert "Exception in ASGI application" not in logged  # uvicorn's own error log

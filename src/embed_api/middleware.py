@@ -1,8 +1,8 @@
 """JSON logging, request ids, the access log, and the request-size limit.
 
-The middlewares are plain ASGI (not BaseHTTPMiddleware) so they run in the
-request's own context: values bound with structlog.contextvars appear on
-every log line the request produces.
+The middlewares are plain ASGI rather than BaseHTTPMiddleware, so they run in the
+request's own context and values bound with structlog.contextvars appear on every
+log line the request produces.
 """
 
 import logging
@@ -64,17 +64,16 @@ def configure_logging(level: str) -> None:
 
 
 class RequestContextMiddleware:
-    """Request id, access log, and the last stop for unexpected exceptions.
+    """Request id, access log, and handling of unexpected exceptions.
 
-    - A caller's X-Request-ID is reused if it looks sane (so ids can be traced
-      across services), otherwise one is generated. Either way it is echoed on
-      the response and bound to every log line of the request.
+    - A caller's X-Request-ID is reused if it looks safe, so ids can be followed
+      across services; otherwise one is generated. It is returned on the response
+      and bound to every log line of the request.
     - One access-log line per request. Endpoints add fields to it through
       `request.state.log_fields`. Request text is never logged.
-    - An unexpected exception is logged with its type and stack but not its
-      message (which can carry request data) and answered with a 500. It is
-      not re-raised: Starlette would pass it on to uvicorn, which logs the
-      message.
+    - An unexpected exception is logged with its type and stack trace but not its
+      message, which can contain request data, and answered with a 500. It is not
+      re-raised, because Starlette would pass it to uvicorn, which logs the message.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -120,7 +119,7 @@ class RequestContextMiddleware:
             else:
                 status = 500  # the response had already started; it is cut off
         finally:
-            if not scope["path"].startswith("/health"):  # probes would drown everything
+            if not scope["path"].startswith("/health"):  # health checks would fill the log
                 log.info(
                     "request",
                     method=scope["method"],
@@ -132,12 +131,11 @@ class RequestContextMiddleware:
 
 
 class BodySizeLimitMiddleware:
-    """Rejects a request body over `max_bytes` with 413 while it is being read.
+    """Rejects a request body larger than `max_bytes` with 413 while it is being read.
 
-    Neither uvicorn nor FastAPI caps body size, and pydantic's limits only
-    apply once the whole body is in memory. Counting bytes as they arrive
-    covers both a Content-Length body and a chunked one, and stops reading at
-    the limit.
+    Neither uvicorn nor FastAPI limits body size, and pydantic's limits only apply
+    once the whole body is in memory. Counting bytes as they arrive works with and
+    without a Content-Length header, and stops reading at the limit.
     """
 
     def __init__(self, app: ASGIApp, max_bytes: int) -> None:
@@ -155,8 +153,8 @@ class BodySizeLimitMiddleware:
             message = await receive()
             received += len(message.get("body", b""))
             if received > self.max_bytes:
-                # Raised inside FastAPI's body parsing, which passes HTTP errors on
-                # to the exception handlers, so it gets the usual error envelope.
+                # FastAPI passes HTTP errors raised while reading the body on to the
+                # exception handlers, so this gets the usual error response.
                 raise APIError(
                     413, "request_too_large", f"Request body exceeds {self.max_bytes} bytes."
                 )

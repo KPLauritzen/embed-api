@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 class InputType(StrEnum):
-    """e5 was trained with these prefixes; leaving them out degrades quality."""
+    """e5 was trained with these prefixes; without them its embeddings are worse."""
 
     QUERY = "query"
     PASSAGE = "passage"
@@ -38,7 +38,7 @@ class Embedder(Protocol):
     max_tokens: int
 
     def count_tokens(self, texts: list[str]) -> list[tuple[int, bool]]:
-        """Per text: tokens the model sees (special tokens included) and whether it was cut."""
+        """Per text: tokens the model sees (special tokens included), and if it was truncated."""
         ...
 
     def embed(self, texts: list[str]) -> np.ndarray:
@@ -69,12 +69,12 @@ def _read_source(model_dir: Path) -> tuple[str, str]:
 
 
 class OnnxEmbedder:
-    """The int8 model from scripts/export_onnx.py, run with ONNX Runtime (no torch).
+    """The int8 model from scripts/export_onnx.py, run with ONNX Runtime instead of torch.
 
-    Does what sentence-transformers does for e5: tokenise, truncate, mean-pool,
-    normalise. Texts go through the model one at a time: dynamic quantisation
-    scales activations per input tensor, so in a batch a text's embedding would
-    depend on the other texts in the request.
+    It does what sentence-transformers does for e5: tokenise, truncate, average the
+    token vectors and normalise. Texts go through the model one at a time, because
+    dynamic quantisation picks its scale from the whole input; in a batch, a text's
+    embedding would depend on the other texts in it.
     """
 
     backend = "onnx-int8"
@@ -104,7 +104,8 @@ class OnnxEmbedder:
                 ["last_hidden_state"],
                 {"input_ids": input_ids, "attention_mask": np.ones_like(input_ids)},
             )
-            pooled = np.asarray(hidden)[0].mean(axis=0)  # one unpadded text: every token counts
+            # One text and no padding, so a plain mean over all tokens is the masked mean.
+            pooled = np.asarray(hidden)[0].mean(axis=0)
             rows.append(pooled / np.linalg.norm(pooled))
         return np.vstack(rows)
 
@@ -127,7 +128,7 @@ class SentenceTransformerEmbedder:
         model_dir = settings.model_dir
         self.model_name, self.revision = _read_source(model_dir)
         self._model = SentenceTransformer(str(model_dir), local_files_only=True)
-        self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)  # counting, as in ONNX
+        self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)  # for counting tokens
         dimension = self._model.get_embedding_dimension()
         assert dimension is not None  # always set for a sentence-embedding model
         self.dimension = dimension
@@ -161,13 +162,13 @@ class EmbedResult:
 
 
 class EmbeddingService:
-    """Adds the e5 prefix, enforces the token budget, and runs one inference at a time.
+    """Adds the e5 prefix, checks the token budget, and runs one inference at a time.
 
-    On CPU, one request using every core beats several competing for them, so
-    requests queue for a single slot. They wait at most `queue_timeout_seconds`
-    and then get 503. A request whose client has gone by the time it reaches
-    the slot is dropped: uvicorn does not cancel handlers, so abandoned requests
-    would otherwise be computed in front of live ones.
+    On a CPU, one request using every core finishes sooner than several sharing them,
+    so requests queue for a single slot. They wait at most `queue_timeout_seconds` and
+    then get 503. uvicorn does not stop a handler when its client disconnects, so a
+    request is dropped if its client has gone by the time it gets the slot; otherwise
+    abandoned requests would be computed ahead of live ones.
     """
 
     def __init__(self, embedder: Embedder, settings: Settings) -> None:
@@ -184,7 +185,7 @@ class EmbeddingService:
     ) -> EmbedResult:
         prefixed = [f"{input_type.value}: {text}" for text in texts]
 
-        # Tokenising up to 64 x 8k chars is not free, so it runs off the event loop too.
+        # Tokenising 64 texts of 8000 characters takes a while, so this runs in a thread too.
         counts = await anyio.to_thread.run_sync(self.embedder.count_tokens, prefixed)
         tokens = [n for n, _ in counts]
         if sum(tokens) > self._max_total_tokens:
@@ -210,8 +211,8 @@ class EmbeddingService:
         try:
             if is_disconnected is not None and await is_disconnected():
                 raise APIError(499, "client_disconnected", "Client went away while queued.")
-            # anyio's worker thread is not cancellable, so the slot stays taken
-            # until inference really finishes, even if the client leaves.
+            # anyio does not cancel the thread, so the slot stays taken until inference
+            # has finished, even if the client leaves.
             vectors = await anyio.to_thread.run_sync(self.embedder.embed, prefixed)
         finally:
             self._slot.release()

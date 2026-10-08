@@ -34,12 +34,13 @@ log = structlog.get_logger(__name__)
 EmbedderFactory = Callable[[Settings], Embedder]
 
 DESCRIPTION = """
-HTTP API for [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large):
-1024-dimensional, L2-normalised text embeddings for 100 languages.
+Text embeddings from [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large):
+1024 dimensions, L2-normalised, for about 100 languages.
 
-* Send raw text and an `input_type`; the server adds e5's `query: ` / `passage: ` prefix.
-* Inputs over 512 tokens are truncated and flagged `truncated: true`.
-* Every response carries an `X-Request-ID` header; errors also include it in the body.
+* Send the text without a prefix and set `input_type`; the server adds e5's `query: ` or
+  `passage: ` prefix.
+* Texts longer than 512 tokens are truncated and marked `truncated: true`.
+* Every response has an `X-Request-ID` header, and error bodies contain the same id.
 """
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
@@ -47,8 +48,8 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     500: {"model": ErrorResponse, "description": "Unexpected server error."},
     503: {
         "model": ErrorResponse,
-        "description": "Model still loading or failed to load, or no inference capacity "
-        "within the queue timeout (`overloaded`, with a Retry-After header).",
+        "description": "The model is loading or failed to load, or no inference slot was "
+        "free within the queue timeout (`overloaded`, with a Retry-After header).",
     },
 }
 
@@ -67,7 +68,7 @@ def _load_failed() -> APIError:
 
 def _load(factory: EmbedderFactory, settings: Settings) -> Embedder:
     embedder = factory(settings)
-    embedder.embed(["query: warm-up"])  # first call pays one-off allocation costs
+    embedder.embed(["query: warm-up"])  # the first call is slow; keep it out of real requests
     return embedder
 
 
@@ -78,8 +79,7 @@ async def _load_in_background(
     try:
         embedder = await anyio.to_thread.run_sync(_load, factory, settings)
     except Exception:
-        # Loading reads local files and logs nothing from requests, so the full
-        # traceback (message included) is safe here and the fastest diagnosis.
+        # Safe to log in full: loading only reads local files, never request data.
         state.failed = True
         log.exception("model_load_failed")
         return
@@ -104,8 +104,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        # Loading in the background lets the server answer straight away:
-        # liveness passes, readiness reports 503 until the model is warm.
+        # Load in the background so the server answers health checks while loading.
         task = asyncio.create_task(_load_in_background(state, embedder_factory, settings))
         yield
         task.cancel()
@@ -118,7 +117,7 @@ def create_app(
     )
     app.state.model = state
     errors.register(app)
-    # Added last = outermost: the request id exists before the size check runs.
+    # The middleware added last runs first, so the request id exists before the size check.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
     app.add_middleware(RequestContextMiddleware)
 
@@ -185,12 +184,11 @@ def create_app(
     @app.get(
         "/health/live",
         tags=["health"],
-        summary="Process is up (and the model has not failed to load)",
+        summary="The process is up and the model has not failed to load",
         responses={503: _ERRORS[503]},
     )
     def live() -> HealthResponse:
-        # A failed load never recovers on its own; failing liveness gets the
-        # process restarted instead of leaving it unready forever.
+        # A failed load does not recover by itself, so ask for a restart.
         if state.failed:
             raise _load_failed()
         return HealthResponse(status="ok")
@@ -198,7 +196,7 @@ def create_app(
     @app.get(
         "/health/ready",
         tags=["health"],
-        summary="Model loaded and warmed up",
+        summary="The model is loaded",
         responses={503: _ERRORS[503]},
     )
     def ready(_: Service) -> HealthResponse:

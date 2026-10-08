@@ -1,10 +1,9 @@
-"""Checks against the real models: `uv run --extra torch pytest -m slow`.
+"""Tests against the real models. Run with `just test-slow`.
 
-Expects ./models/e5 (torch, from scripts/download_model.py) and
-./models/e5-int8 (onnx, from scripts/export_onnx.py); a backend whose model is
-missing is skipped. e5
-similarities cluster in 0.7-1.0, so assertions compare orderings rather than
-absolute thresholds.
+They need models/e5 (scripts/download_model.py) and models/e5-int8
+(scripts/export_onnx.py); a backend whose model is missing is skipped. e5
+similarities mostly fall between 0.7 and 1.0, so the tests compare orderings
+rather than absolute scores.
 """
 
 import numpy as np

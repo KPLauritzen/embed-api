@@ -1,20 +1,19 @@
-"""Speed and fidelity of the API's backends, measured through the API's own code.
+"""Speed of the API's backends, measured through the API's own embedder classes.
 
-    uv run scripts/download_model.py && uv run scripts/export_onnx.py   # once
-    uv run python scripts/benchmark.py --threads 4
+    just bench    # needs models/e5 and models/e5-int8 (just model model-torch)
 
-Three rows, each timed through the embedder class the server uses:
+Three backends:
 
-- torch fp32: the reference (sentence-transformers, batches of 16)
-- ONNX Runtime fp32: the Hub's fp32 ONNX export through OnnxEmbedder, which
-  separates the runtime's contribution from quantisation's (downloaded once
-  to models/e5-onnx-fp32)
-- ONNX Runtime int8: what the API serves (models/e5-int8)
+- torch fp32: the original model via sentence-transformers, in batches of 16
+- ONNX Runtime fp32: the model repository's fp32 ONNX export, run like the int8
+  model (downloaded once to models/e5-onnx-fp32). It shows how much of the speedup
+  comes from ONNX Runtime and how much from quantisation.
+- ONNX Runtime int8: the model the API serves
 
-Fidelity is measured against torch fp32 on a small Danish/English retrieval
-set: cosine similarity between the embeddings (mean and minimum), and whether
-each query's top-ranked passage is unchanged. Twelve pairs make this a sanity
-check, not an evaluation.
+It also compares each backend with torch fp32 on 12 Danish and English
+query/passage pairs: cosine similarity of the embeddings, and whether each query
+still ranks its own passage first. With 12 pairs this is a quick check; see
+eval_retrieval.py for a proper quality measurement.
 """
 
 import argparse
@@ -55,7 +54,7 @@ SENTENCE = (
 
 
 def fp32_onnx_dir(int8_dir: Path, dest: Path) -> Path:
-    """The Hub's fp32 ONNX export, laid out like the int8 directory."""
+    """The repository's fp32 ONNX export, in a directory laid out like the int8 one."""
     if not (dest / "model.onnx").exists():
         source = json.loads((int8_dir / "source.json").read_text())
         snapshot_download(

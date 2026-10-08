@@ -24,7 +24,7 @@ class ErrorResponse(BaseModel):
 
 
 class APIError(HTTPException):
-    """An HTTP error with a stable, machine-readable `code` for the error envelope."""
+    """An HTTP error with a `code` for the error response body."""
 
     def __init__(
         self, status_code: int, code: str, message: str, headers: dict[str, str] | None = None
@@ -66,8 +66,8 @@ async def handle_http_error(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
-    # FastAPI's default body echoes each offending value back (up to the 1 MB
-    # body limit). Keep where and why; drop the client's text.
+    # FastAPI's default response repeats each rejected value, which can be up to 1 MB of
+    # the client's text. Keep only where and why.
     assert isinstance(exc, RequestValidationError)
     details = [
         {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
