@@ -169,8 +169,11 @@ only a restart can fix that.
 fp32 ONNX file the model repository ships (ONNX Runtime's dynamic quantiser, AVX2 settings;
 the repository's own int8 file targets AVX-512 VNNI). At runtime the API needs only ONNX
 Runtime and a tokenizer: tokenise, truncate to 512, mean-pool, normalise, the same
-computation sentence-transformers does. A slow test checks the backends agree: same token
-counts, cosine > 0.98. The PyTorch backend stays as the fp32 reference and for GPUs.
+computation sentence-transformers does. Slow tests check the token counts match what
+sentence-transformers feeds the model and that int8 embeddings stay above cosine 0.98 to
+fp32; on Danish retrieval benchmarks int8 costs 1–3% nDCG@10 (see
+[Performance](#retrieval-quality-what-int8-costs)). The PyTorch backend stays as the fp32
+reference and for GPUs.
 
 **One text per forward pass, for reproducible embeddings.** Dynamic quantisation picks its
 activation scale from the whole input tensor. Batched, a text's int8 embedding depended on
@@ -282,5 +285,6 @@ tests/                      fast (fake model) and slow (real model) suites
 
 The first version deliberately leaves some things out; [IMPROVEMENTS.md](IMPROVEMENTS.md)
 lists them. The main ones are authentication and rate limiting, Prometheus metrics, and
-a larger quality evaluation of the int8 model. For a high-traffic deployment, a purpose-built server such as Hugging
-Face Text Embeddings Inference would be a strong alternative to a hand-written one.
+closing int8's 1–3% quality gap (calibrated static quantisation). For a high-traffic
+deployment, a purpose-built server such as Hugging Face Text Embeddings Inference would be a
+strong alternative to a hand-written one.

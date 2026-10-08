@@ -89,7 +89,7 @@ Batched, a text's embedding depended on its neighbours in the request: cosine **
 - **CI**: ruff + tests → build → **smoke-test the container** → push to GHCR
 - **CD**: GitOps on my k3s homelab. Image updater + ArgoCD roll out each new digest. On the node: ready in 1.7 s, 68 ms per text, 1.45 GB peak
 
-**What I'd add for real production:** auth + rate limiting · Prometheus metrics · a larger quality eval (MTEB) · autoscaling on queue time · or Hugging Face TEI instead of a hand-written server
+**What I'd add for real production:** auth + rate limiting · Prometheus metrics · close int8's 1–3% gap (static quantisation) · autoscaling on queue time · or Hugging Face TEI instead of a hand-written server
 
 ---
 
