@@ -21,8 +21,8 @@ class Settings(BaseSettings):
 
     backend: Backend = Field(
         Backend.ONNX,
-        description="onnx: int8 model exported by scripts/export_onnx.py (default; ~2x faster, "
-        "no torch needed). torch: fp32 via sentence-transformers (install the `torch` extra).",
+        description="onnx: int8 model built by scripts/export_onnx.py (default; faster and "
+        "smaller, no torch needed). torch: fp32 via sentence-transformers (the `torch` extra).",
     )
     model_id: str = Field(
         DEFAULT_MODEL_ID,
@@ -46,7 +46,9 @@ class Settings(BaseSettings):
         description="Inference threads. Set it to the container's CPU limit: torch and "
         "ONNX Runtime otherwise size their pools from the host's cores and get throttled.",
     )
-    encode_batch_size: int = Field(16, ge=1, description="Inputs per forward pass.")
+    encode_batch_size: int = Field(
+        16, ge=1, description="torch backend: inputs per forward pass (onnx runs one at a time)."
+    )
     max_concurrent_batches: int = Field(
         1, ge=1, description="Requests encoding at once. 1 lets one batch use every thread."
     )

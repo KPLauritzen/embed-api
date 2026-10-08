@@ -35,7 +35,7 @@ FastAPI · ONNX Runtime (int8) · Docker · GitHub Actions · k3s
 - **Validation**: one pydantic schema → validation + Swagger. Size limit *before* parsing, token budget *after* tokenising.
 - **Errors**: one envelope with a stable `code` and the `request_id`, validation included.
 - **Logging**: JSON, one access line per request, `X-Request-ID` everywhere. **Input text is never logged** (tested).
-- **Practice**: `Embedder` protocol → fast tests with a fake model; slow tests on the real one; ruff + CI.
+- **Practice**: `Embedder` protocol → fast tests with a fake model in CI; slow tests on the real models locally; ruff.
 
 ---
 
@@ -51,6 +51,7 @@ client ──▶ RequestContext (request id, access log)
 ```
 
 - Model loads **in the background**: liveness passes at once, readiness flips when warm
+- Queue is **bounded**: 503 + `Retry-After` after 30 s; abandoned requests are dropped, not computed
 - Inference threads follow the **container CPU limit**, not the host's cores
 
 ---
@@ -64,8 +65,8 @@ client ──▶ RequestContext (request id, access log)
 | **ONNX Runtime int8** | **0.56 GB** | **33 ms** | **1.04 s** | **0.993** |
 
 - Runtime halves single-text latency; **int8** takes another ~40% and gives **1.8× throughput**
-- Quantised for **AVX2** (the deployment CPU); the Hub's int8 file needs AVX-512 VNNI
-- Runtime is ONNX Runtime + tokenizers: **no torch**, image 1.8 → 0.6 GB
+- Quantised for **AVX2** (the deployment CPU); the Hub's int8 file targets AVX-512 VNNI
+- Runtime is ONNX Runtime + tokenizers: **no torch**, image 1.8 → 0.6 GB compressed
 
 ---
 
@@ -87,7 +88,7 @@ Batched, a text's embedding depended on its neighbours in the request: cosine **
 - **CI**: ruff + tests → build → **smoke-test the container** → push to GHCR
 - **CD**: GitOps on my k3s homelab. Image updater + ArgoCD roll out each new digest. On the node: ready in 1.7 s, 68 ms per text, 1.45 GB peak
 
-**What I'd add for real production:** queue timeout with `Retry-After` · auth + rate limiting · Prometheus metrics · a larger quality eval · or Hugging Face TEI instead of a hand-written server
+**What I'd add for real production:** auth + rate limiting · Prometheus metrics · a larger quality eval (MTEB) · autoscaling on queue time · or Hugging Face TEI instead of a hand-written server
 
 ---
 

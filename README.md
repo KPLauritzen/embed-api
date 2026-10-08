@@ -5,7 +5,7 @@ A production-minded HTTP API for the
 embedding model: 1024-dimensional, L2-normalised text embeddings for 100 languages,
 on CPU. By default it serves an int8-quantised ONNX version of the model: a quarter of the
 size, 3.5× faster than PyTorch for a single text and 1.8× the throughput for 32, with
-embeddings at cosine ≥ 0.993 to the original (mean 0.995) on our test set.
+embeddings at cosine 0.995 to the original on average (minimum 0.9929) on our test set.
 
 ```console
 $ curl -s localhost:8000/v1/embed -H 'content-type: application/json' \
@@ -23,7 +23,7 @@ Swagger docs are at **`/docs`** once the server is running.
 ## Quickstart
 
 **Requirements:** Python 3.12 and [uv](https://docs.astral.sh/uv/). Building the int8 model
-downloads 2.2 GB and needs ~9 GB of free RAM for about a minute; serving needs ~2.5 GB.
+downloads 2.2 GB and needs ~8.5 GB of free RAM for about a minute; serving peaks at ~1.5 GB.
 
 ```sh
 uv sync --no-dev                                 # the API: ONNX Runtime, no torch
@@ -31,12 +31,14 @@ uv run scripts/export_onnx.py                    # pinned revision -> int8 ./mod
 uv run --no-dev uvicorn embed_api.main:app --port 8000          # ready in ~2 s
 # then open http://localhost:8000/docs, or in another shell:
 uv run --no-dev python examples/demo.py http://localhost:8000   # DA/EN/DE similarity
+uv run --no-dev python examples/limits.py http://localhost:8000 # truncation, token budget
 ```
 
 (`--no-dev` matters on `uv run` too: without it, uv installs the dev group, torch included.)
 
 The scripts carry their own dependencies (PEP 723), so the export tooling never enters
-the API's environment.
+the API's environment. Downloads print a "sending unauthenticated requests to the HF Hub"
+warning; it is harmless (set `HF_TOKEN` to silence it).
 
 **The PyTorch backend** serves the original fp32 model. It is the reference the int8 model
 is tested against, and the quickest way to try a smaller e5 model. Plain `uv sync` installs
@@ -47,14 +49,14 @@ uv sync
 uv run scripts/download_model.py                 # pinned fp32 revision -> ./models/e5 (2.2 GB)
 EMBED_BACKEND=torch EMBED_MODEL_PATH=models/e5 uv run uvicorn embed_api.main:app --port 8000
 EMBED_BACKEND=torch EMBED_MODEL_ID=intfloat/multilingual-e5-small EMBED_MODEL_REVISION=main \
-  uv run uvicorn embed_api.main:app --port 8000
+  uv run uvicorn embed_api.main:app --port 8000   # downloads ~470 MB at startup
 ```
 
 ### Docker
 
 The image builds the int8 model from the pinned revision in a separate build stage, so the
 runtime image has no torch, needs no network access, and is 0.6 GB compressed (amd64). The
-build itself downloads 2.2 GB and needs ~9 GB of RAM: give Docker Desktop's VM enough.
+build itself downloads 2.2 GB and needs ~8.5 GB of RAM: give Docker Desktop's VM enough.
 
 ```sh
 docker build -t embed-api .
@@ -62,7 +64,7 @@ docker run --rm -p 8000:8000 embed-api
 ```
 
 CI builds the image, starts it with a read-only root filesystem, checks it embeds, and only
-then pushes it to GHCR.
+then pushes that same image to GHCR.
 
 ### Tests
 
@@ -71,6 +73,9 @@ uv run pytest              # fast suite (fake model, <1 s), runs in CI
 uv run pytest -m slow      # real models in ./models: both backends, int8 vs fp32, batch invariance
 uv run ruff check && uv run ruff format --check
 ```
+
+The slow suite needs both models (`download_model.py` and `export_onnx.py`) and runs locally,
+not in CI; CI covers the built image with a smoke test instead.
 
 ## API
 
@@ -91,7 +96,8 @@ clustering; use `passage` for the documents being searched.
 tokens. Longer inputs are truncated rather than rejected, and each embedding reports
 `tokens` and `truncated` so the caller knows.
 
-**Errors.** Every error, validation included, uses one envelope and carries the request id:
+**Errors.** Every error the app produces, validation and routing included, uses one
+envelope and carries the request id:
 
 ```json
 {"error": {"code": "validation_error", "message": "Request validation failed.",
@@ -105,12 +111,16 @@ offending input back.
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `bad_request` | Malformed `Content-Length` |
+| 404 / 405 | `not_found` / `method_not_allowed` | Unknown path, or wrong method |
 | 413 | `request_too_large` | Body over `EMBED_MAX_BODY_BYTES` |
 | 422 | `validation_error` | Missing/unknown `input_type`, empty or blank text, >64 inputs, >8000 chars, extra fields |
 | 422 | `token_budget_exceeded` | Request needs more than `EMBED_MAX_TOTAL_TOKENS` |
 | 500 | `internal_error` | Anything unexpected; details are only in the server log |
 | 503 | `model_not_ready` / `model_load_failed` | Still loading, or loading failed |
+| 503 | `overloaded` | No inference capacity within `EMBED_QUEUE_TIMEOUT_SECONDS`; has `Retry-After` |
+
+Malformed HTTP (a non-numeric `Content-Length`, say) is rejected by uvicorn itself, in plain
+text, before the app sees it.
 
 ## Configuration
 
@@ -126,6 +136,7 @@ All settings are environment variables with the `EMBED_` prefix.
 | `EMBED_NUM_THREADS` | runtime default | Inference and tokenizer threads; set to the container's CPU limit |
 | `EMBED_ENCODE_BATCH_SIZE` | `16` | torch only: inputs per forward pass |
 | `EMBED_MAX_CONCURRENT_BATCHES` | `1` | Requests running inference at once |
+| `EMBED_QUEUE_TIMEOUT_SECONDS` | `30` | Longest wait for inference before `503 overloaded` |
 | `EMBED_MAX_TOTAL_TOKENS` | `8192` | Token budget per request |
 | `EMBED_MAX_BODY_BYTES` | `1000000` | Largest accepted body |
 | `EMBED_LOG_LEVEL` | `INFO` | |
@@ -135,13 +146,22 @@ All settings are environment variables with the `EMBED_` prefix.
 **Inference stays off the event loop.** Encoding is CPU-bound and blocking. It runs in a
 worker thread, so `/health/*` keeps answering while a large request is being embedded. A
 semaphore lets one request run inference at a time (configurable): on CPU, one request
-using every core beats several competing for them. Requests queue for it without a timeout
-today; a timeout with `Retry-After` is the first item in [IMPROVEMENTS.md](IMPROVEMENTS.md).
+using every core beats several competing for them.
+
+**Bounded queue, and abandoned requests are dropped.** A request waits at most
+`EMBED_QUEUE_TIMEOUT_SECONDS` for that semaphore, then gets `503 overloaded` with a
+`Retry-After` estimated from recent inference times. uvicorn does not cancel a handler when
+its client disconnects, so a request whose client has gone by the time it reaches the front
+of the queue is dropped (logged as 499) instead of computed; otherwise timeouts and retries
+pile up in front of live requests. Measured: after five clients abandon full-budget requests,
+a new one-text request now waits 7.9 s (the one request already computing) instead of 27 s.
+The access log records each request's `queue_ms`.
 
 **Bounded work per request.** Pydantic limits (64 inputs, 8000 characters each) only apply
 after the body has been read, so a middleware rejects oversized bodies first. The limit
 that actually bounds CPU time and memory is the **token budget**: a full 8192-token request
-takes ~8 s on 4 cores, and 64 × 512 tokens would take four times that.
+takes ~8 s on 4 cores of the benchmark machine (9.9 s on the deployment node), and 64 × 512
+tokens would take four times that.
 
 **Background model loading.** The model loads in a background task after the server starts.
 Liveness answers immediately and readiness returns 503 until the model is warm, so an
@@ -157,7 +177,7 @@ counts, cosine > 0.98. The PyTorch backend stays as the fp32 reference and for G
 
 **One text per forward pass, for reproducible embeddings.** Dynamic quantisation picks its
 activation scale from the whole input tensor. Batched, a text's int8 embedding depended on
-the other texts in the request (cosine ~0.994 to itself embedded alone), which breaks
+the other texts in the request (measured: cosine 0.994 to itself embedded alone), which breaks
 caching and deduplication by text. The ONNX backend therefore runs texts one at a time, and
 a test asserts batch invariance. That costs ~10% throughput at 32 texts and saves padding
 work.
@@ -170,14 +190,17 @@ against a smaller limit. `EMBED_NUM_THREADS` is set from the limit and applies t
 id, latency, input count, token count and truncation count. **Input text is never logged**
 (embedding inputs are often user data): not in access lines, not in validation errors, and
 not in unexpected-error logs, which record the exception type and stack but not its message.
-Tests check this against the real log output. Every response carries an `X-Request-ID`
+Unexpected exceptions are answered and logged by the app's own middleware and never reach
+uvicorn, which would log the message. Tests check the real log output, including under a
+real uvicorn server. Every response carries an `X-Request-ID`
 header (a caller-supplied id is reused if it is safe), and the same id is on every log line
 for that request and in every error body.
 
 **Reproducible model.** The revision is pinned in one place, and only the files needed are
 downloaded; the model repository also carries a `.bin` duplicate, ONNX and OpenVINO exports,
 ~9.5 GB in all. The export records the model id and revision it was built from, and
-`/v1/info` reports those.
+`/v1/info` reports those (as does the torch backend for a directory from
+`download_model.py`).
 
 **Testable without the model.** The API depends on a small `Embedder` protocol. The fast
 suite uses a deterministic fake and covers the HTTP contract in under a second; a separate
@@ -228,12 +251,13 @@ scripts/download_model.py   fetch the pinned fp32 model (torch backend); pins th
 scripts/benchmark.py        speed and fidelity of the backends
 scripts/smoke_test.sh       run the built image and check it embeds (CI)
 examples/demo.py            cross-lingual similarity demo
+examples/limits.py          truncation flag and token budget demo
 tests/                      fast (fake model) and slow (real model) suites
 ```
 
 ## Limitations and next steps
 
 The first version deliberately leaves some things out; [IMPROVEMENTS.md](IMPROVEMENTS.md)
-lists them. The main ones are a queue timeout, authentication and rate limiting, and
-Prometheus metrics. For a high-traffic deployment, a purpose-built server such as Hugging
+lists them. The main ones are authentication and rate limiting, Prometheus metrics, and
+a larger quality evaluation of the int8 model. For a high-traffic deployment, a purpose-built server such as Hugging
 Face Text Embeddings Inference would be a strong alternative to a hand-written one.

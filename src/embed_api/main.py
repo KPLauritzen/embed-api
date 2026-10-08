@@ -99,7 +99,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # Loading takes tens of seconds. Doing it in the background lets the
+        # Loading takes seconds (tens for torch). Doing it in the background lets the
         # server answer straight away: liveness passes, readiness reports 503
         # until the model is warm, and orchestrators can tell the two apart.
         task = asyncio.create_task(_load_in_background(state, embedder_factory, settings))

@@ -4,9 +4,9 @@ Things deliberately left out of the first version, roughly in order of value. If
 items move from here into scope.
 
 ## API behaviour
-- **Queue timeout + `Retry-After`.** Today a request waits for the inference semaphore
-  indefinitely. Return 503 with `Retry-After` (derived from observed batch latency) when the
-  wait exceeds a budget.
+- **Stop in-flight work for a departed client.** Queued requests from disconnected clients
+  are dropped, but one already computing runs to the end (up to ~10 s for a full budget).
+  The ONNX backend embeds one text at a time, so it could check for a disconnect between texts.
 - **Strict truncation mode.** `truncate: false` → 422 naming the over-long input, for callers who
   would rather fail than embed a prefix of their text.
 - **OpenAI-compatible alias** (`POST /v1/embeddings`) so existing clients work unchanged.

@@ -54,7 +54,7 @@ class OnnxEmbedder:
     its activation scale from the whole input tensor, so in a batch each
     text's embedding would depend on the other texts in the request (cosine
     ~0.994 to itself embedded alone). One at a time, a text always gets the
-    same vector, for ~5-15% less throughput (and no wasted work on padding).
+    same vector, for ~10% less throughput (and no wasted work on padding).
     """
 
     def __init__(self, settings: Settings) -> None:
