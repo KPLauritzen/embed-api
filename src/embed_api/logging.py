@@ -15,7 +15,7 @@ from typing import Any
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from embed_api.errors import error_response
+from embed_api.errors import error_response, log_unexpected
 
 _REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
@@ -67,6 +67,9 @@ class RequestContextMiddleware:
     traced across services; anything else is replaced to keep logs clean.
     Endpoints add fields to the access line via `request.state.log_fields`.
     Request text is never logged.
+
+    It is also where unexpected exceptions end: logged without their message
+    and answered with a 500 envelope, never propagated to the server.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -99,9 +102,16 @@ class RequestContextMiddleware:
 
         try:
             await self.app(scope, receive, send_with_id)
-        except Exception:
-            status = 500  # sent by Starlette's outermost error middleware
-            raise
+        except Exception as exc:
+            # Not re-raised: uvicorn would log it again, message and all.
+            log_unexpected(exc)
+            if status is None:
+                response = error_response(
+                    500, "internal_error", "Internal server error.", request_id
+                )
+                await response(scope, receive, send_with_id)
+            else:
+                status = 500  # the response had started; it is cut off here
         finally:
             if status is None:
                 status = 499  # client went away before a response (nginx's convention)

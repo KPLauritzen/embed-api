@@ -66,18 +66,20 @@ jobs:
           context: .
           load: true
           tags: embed-api:ci
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           # mode=min: only the final image's layers are cached, not the model
           # stage's 2.2 GB fp32 download, which would crowd the 10 GB cache.
           cache-to: type=gha,mode=min
       - name: Smoke test
         run: scripts/smoke_test.sh embed-api:ci
+      # Push the image that passed the smoke test, not a rebuild of it.
       - name: Push
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            docker tag embed-api:ci "$tag"
+            docker push "$tag"
+          done

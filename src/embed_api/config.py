@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     max_concurrent_batches: int = Field(
         1, ge=1, description="Requests encoding at once. 1 lets one batch use every thread."
     )
+    queue_timeout_seconds: float = Field(
+        30,
+        gt=0,
+        description="Longest a request waits for inference capacity before getting 503 "
+        "overloaded with Retry-After.",
+    )
     max_total_tokens: int = Field(
         8192,
         ge=512,

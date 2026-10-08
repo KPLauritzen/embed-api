@@ -73,7 +73,10 @@ class TestValidation:
         ],
     )
     def test_rejected_with_422(self, client: TestClient, payload: dict) -> None:
-        assert embed(client, payload).status_code == 422
+        r = embed(client, payload)
+
+        assert r.status_code == 422
+        assert r.json()["error"]["code"] == "validation_error"
 
     def test_error_points_at_offending_item(self, client: TestClient) -> None:
         r = embed(client, {"input": ["ok", "  "], "input_type": "query"})
@@ -208,6 +211,20 @@ def test_info(client: TestClient, settings: Settings) -> None:
     assert r.status_code == 200
     assert r.json()["limits"]["max_total_tokens"] == settings.max_total_tokens
     assert r.json()["limits"]["max_tokens_per_input"] == 16
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status", "code"),
+    [("GET", "/nope", 404, "not_found"), ("GET", "/v1/embed", 405, "method_not_allowed")],
+)
+def test_routing_errors_use_the_envelope(
+    client: TestClient, method: str, path: str, status: int, code: str
+) -> None:
+    r = client.request(method, path, headers={"X-Request-ID": "req-404"})
+
+    assert r.status_code == status
+    assert r.json()["error"]["code"] == code
+    assert r.json()["error"]["request_id"] == "req-404"
 
 
 def test_root_redirects_to_docs(client: TestClient) -> None:

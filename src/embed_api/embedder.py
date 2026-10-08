@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -128,8 +131,16 @@ class SentenceTransformerEmbedder:
                 settings.model_id, revision=settings.model_revision, device=settings.device
             )
         self._batch_size = settings.encode_batch_size
-        self.model_name = settings.model_id
-        self.revision = settings.model_revision
+        self.model_name, self.revision = settings.model_id, settings.model_revision
+        if settings.model_path:
+            # A local directory is whatever is in it, not what the settings say:
+            # download_model.py records that in source.json.
+            source_file = Path(settings.model_path) / "source.json"
+            if source_file.exists():
+                source = json.loads(source_file.read_text())
+                self.model_name, self.revision = source["model_id"], source["revision"]
+            else:
+                self.model_name, self.revision = settings.model_path, "unknown"
         self.backend = "torch-fp32"
         self.dimension = self._model.get_embedding_dimension()
         self.max_tokens = self._model.max_seq_length
@@ -169,6 +180,7 @@ class EmbedResult:
     vectors: np.ndarray
     token_counts: list[int]
     truncated: list[bool]
+    queue_ms: float
 
     @property
     def total_tokens(self) -> int:
@@ -176,14 +188,32 @@ class EmbedResult:
 
 
 class EmbeddingService:
-    """Adds the e5 prefix, enforces the token budget and serialises inference."""
+    """Adds the e5 prefix, enforces the token budget and serialises inference.
+
+    Requests queue for inference capacity for at most `queue_timeout_seconds`,
+    then get 503 with a Retry-After estimate. A request whose client has gone
+    by the time it reaches the front of the queue is dropped, not computed:
+    uvicorn does not cancel handlers, so abandoned requests (and their
+    retries) would otherwise pile up in front of live ones.
+    """
 
     def __init__(self, embedder: Embedder, settings: Settings) -> None:
         self.embedder = embedder
         self._max_total_tokens = settings.max_total_tokens
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_batches)
+        self._queue_timeout = settings.queue_timeout_seconds
+        self._waiting = 0
+        self._recent_seconds = 1.0  # moving average of inference time, for Retry-After
 
-    async def embed(self, texts: list[str], input_type: InputType) -> EmbedResult:
+    def _retry_after(self) -> str:
+        return str(min(60, max(1, math.ceil(self._recent_seconds * self._waiting))))
+
+    async def embed(
+        self,
+        texts: list[str],
+        input_type: InputType,
+        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+    ) -> EmbedResult:
         prefixed = [f"{input_type.value}: {text}" for text in texts]
 
         # Tokenising up to 64 x 8k chars is not free, so it runs off the event loop too.
@@ -199,9 +229,33 @@ class EmbeddingService:
                 "Split it into smaller requests.",
             )
 
+        queued_at = time.perf_counter()
+        self._waiting += 1
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), self._queue_timeout)
+        except TimeoutError:
+            raise APIError(
+                503,
+                "overloaded",
+                f"No inference capacity within {self._queue_timeout:g}s. Retry later.",
+                headers={"Retry-After": self._retry_after()},
+            ) from None
+        finally:
+            self._waiting -= 1
+        queue_ms = (time.perf_counter() - queued_at) * 1000
+
         # The worker thread is not cancellable (anyio's default), so a client
         # disconnecting mid-inference still holds the semaphore until the batch
         # finishes. That keeps max_concurrent_batches an actual bound.
-        async with self._semaphore:
+        try:
+            if is_disconnected is not None and await is_disconnected():
+                raise APIError(499, "client_disconnected", "Client went away while queued.")
+            started = time.perf_counter()
             vectors = await anyio.to_thread.run_sync(self.embedder.embed, prefixed)
-        return EmbedResult(vectors=vectors, token_counts=used, truncated=truncated)
+            elapsed = time.perf_counter() - started
+            self._recent_seconds = 0.8 * self._recent_seconds + 0.2 * elapsed
+        finally:
+            self._semaphore.release()
+        return EmbedResult(
+            vectors=vectors, token_counts=used, truncated=truncated, queue_ms=round(queue_ms, 1)
+        )

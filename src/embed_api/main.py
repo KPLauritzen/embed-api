@@ -41,7 +41,11 @@ HTTP API for [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/
 _ERRORS: dict[int | str, dict[str, Any]] = {
     413: {"model": ErrorResponse, "description": "Request body too large."},
     500: {"model": ErrorResponse, "description": "Unexpected server error."},
-    503: {"model": ErrorResponse, "description": "Model still loading, or failed to load."},
+    503: {
+        "model": ErrorResponse,
+        "description": "Model still loading or failed to load, or no inference capacity "
+        "within the queue timeout (`overloaded`, with a Retry-After header).",
+    },
 }
 
 
@@ -137,8 +141,9 @@ def create_app(
         },
     )
     async def embed(body: EmbedRequest, request: Request, service: Service) -> EmbedResponse:
-        result = await service.embed(body.input, body.input_type)
+        result = await service.embed(body.input, body.input_type, request.is_disconnected)
         request.state.log_fields.update(
+            queue_ms=result.queue_ms,
             n_inputs=len(body.input),
             input_type=body.input_type.value,
             total_tokens=result.total_tokens,

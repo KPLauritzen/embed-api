@@ -13,7 +13,9 @@ without relying on the Hugging Face cache layout.
 """
 
 import argparse
+import json
 import os
+from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
@@ -34,8 +36,11 @@ ALLOW_PATTERNS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-id", default=os.environ.get("EMBED_MODEL_ID", MODEL_ID))
-    parser.add_argument("--revision", default=os.environ.get("EMBED_MODEL_REVISION", REVISION))
+    model_id = os.environ.get("EMBED_MODEL_ID", MODEL_ID)
+    # The pinned commit belongs to the pinned model; another model defaults to main.
+    revision = os.environ.get("EMBED_MODEL_REVISION", REVISION if model_id == MODEL_ID else "main")
+    parser.add_argument("--model-id", default=model_id)
+    parser.add_argument("--revision", default=revision)
     parser.add_argument("--dest", default="models/e5")
     args = parser.parse_args()
 
@@ -45,6 +50,9 @@ def main() -> None:
         allow_patterns=ALLOW_PATTERNS,
         local_dir=args.dest,
     )
+    # Recorded so the server reports what it actually loaded, not its settings.
+    source = {"model_id": args.model_id, "revision": args.revision}
+    (Path(path) / "source.json").write_text(json.dumps(source, indent=2) + "\n")
     print(path)
 
 
