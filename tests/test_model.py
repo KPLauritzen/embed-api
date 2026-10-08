@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from embed_api.config import Backend, Settings
-from embed_api.embedder import Embedder, load_embedder
+from embed_api.embedder import Embedder, SentenceTransformerEmbedder, load_embedder
 
 pytestmark = pytest.mark.slow
 
@@ -71,6 +71,7 @@ def test_token_count_includes_prefix_and_special_tokens(model: Embedder) -> None
 
 def test_counts_match_what_sentence_transformers_feeds_the_model() -> None:
     torch_model = _load(Backend.TORCH)
+    assert isinstance(torch_model, SentenceTransformerEmbedder)
 
     ours = [n for n, _ in torch_model.count_tokens(TEXTS)]
     theirs = torch_model._model.tokenize(TEXTS)["attention_mask"].sum(dim=1).tolist()

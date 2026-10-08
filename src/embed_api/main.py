@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -103,7 +103,7 @@ def create_app(
     state = ModelState()
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # Loading in the background lets the server answer straight away:
         # liveness passes, readiness reports 503 until the model is warm.
         task = asyncio.create_task(_load_in_background(state, embedder_factory, settings))

@@ -18,13 +18,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - uses: extractions/setup-just@v3
       - run: uv sync --locked
-      - name: Lint
-        run: uv run ruff check
-      - name: Format
-        run: uv run ruff format --check
-      - name: Test (fast; slow tests need the real model)
-        run: uv run pytest
+      # Lint, format check, type check and fast tests: the same command as locally.
+      # The slow tests need the real models and run locally (`just test-slow`).
+      - run: just check
 
   # Build after `check` passes. Pull requests build and discard the image, so a
   # broken Dockerfile is caught before merge; only main pushes to GHCR.

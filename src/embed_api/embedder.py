@@ -46,15 +46,15 @@ class Embedder(Protocol):
         ...
 
 
-def _load_tokenizer(model_dir: Path) -> Tokenizer:
-    """The model's fast tokenizer, truncating at the model's token limit."""
+def _load_tokenizer(model_dir: Path) -> tuple[Tokenizer, int]:
+    """The model's fast tokenizer, truncating at the model's token limit, and that limit."""
     from tokenizers import Tokenizer
 
-    config = json.loads((model_dir / "sentence_bert_config.json").read_text())
+    max_tokens = json.loads((model_dir / "sentence_bert_config.json").read_text())["max_seq_length"]
     tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
-    tokenizer.enable_truncation(max_length=config["max_seq_length"])
+    tokenizer.enable_truncation(max_length=max_tokens)
     tokenizer.no_padding()
-    return tokenizer
+    return tokenizer, max_tokens
 
 
 def _count_tokens(tokenizer: Tokenizer, texts: list[str]) -> list[tuple[int, bool]]:
@@ -84,8 +84,7 @@ class OnnxEmbedder:
 
         model_dir = settings.model_dir
         self.model_name, self.revision = _read_source(model_dir)
-        self._tokenizer = _load_tokenizer(model_dir)
-        self.max_tokens = self._tokenizer.truncation["max_length"]
+        self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)
         options = ort.SessionOptions()
         if settings.num_threads:
             options.intra_op_num_threads = settings.num_threads
@@ -101,11 +100,11 @@ class OnnxEmbedder:
         rows = []
         for encoding in self._tokenizer.encode_batch(texts):
             input_ids = np.array([encoding.ids], dtype=np.int64)
-            (hidden,) = self._session.run(
+            [hidden] = self._session.run(
                 ["last_hidden_state"],
                 {"input_ids": input_ids, "attention_mask": np.ones_like(input_ids)},
             )
-            pooled = hidden[0].mean(axis=0)  # one unpadded text: every token counts
+            pooled = np.asarray(hidden)[0].mean(axis=0)  # one unpadded text: every token counts
             rows.append(pooled / np.linalg.norm(pooled))
         return np.vstack(rows)
 
@@ -128,8 +127,7 @@ class SentenceTransformerEmbedder:
         model_dir = settings.model_dir
         self.model_name, self.revision = _read_source(model_dir)
         self._model = SentenceTransformer(str(model_dir), local_files_only=True)
-        self._tokenizer = _load_tokenizer(model_dir)  # for counting, as in the ONNX backend
-        self.max_tokens = self._model.max_seq_length
+        self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)  # counting, as in ONNX
         self.dimension = self._model.get_embedding_dimension()
 
     def count_tokens(self, texts: list[str]) -> list[tuple[int, bool]]:

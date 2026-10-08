@@ -60,16 +60,23 @@ docker run --rm -p 8000:8000 embed-api
 CI builds the image, starts it with a read-only root filesystem, checks it embeds, and only
 then pushes that same image to GHCR.
 
-### Tests
+### Development
+
+Common tasks are in the [justfile](justfile) (`just` lists them):
 
 ```sh
-uv run pytest              # fast suite (fake model, <1 s), runs in CI
-uv run --extra torch pytest -m slow   # real models: both backends, int8 vs fp32, batch invariance
-uv run ruff check && uv run ruff format --check
+just setup        # uv sync + install the pre-commit hooks
+just check        # ruff lint + format check, ty type check, fast tests: what CI runs
+just test-slow    # real models in ./models: both backends, int8 vs fp32, batch invariance
+just serve        # also: model, model-torch, serve-torch, demo, bench, docker-build, slides
 ```
 
-The slow suite needs both models (`download_model.py` and `export_onnx.py`) and runs locally,
-not in CI; CI covers the built image with a smoke test instead.
+The fast suite uses a fake model and runs in under a second. The slow suite needs both
+models (`just model model-torch`) and runs locally, not in CI; CI covers the built image
+with a smoke test instead. Pre-commit runs ruff, ty, a `uv.lock` consistency check and a
+guard against committing large files (model weights) on every commit. Type checking uses
+[ty](https://github.com/astral-sh/ty), pinned exactly because it is still pre-1.0; the
+standalone scripts in `scripts/` carry their own dependencies and are not type-checked.
 
 ## API
 

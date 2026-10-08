@@ -42,6 +42,7 @@ async def test_waiting_longer_than_the_queue_timeout_gives_503_with_retry_after(
         embedder.release.set()
 
     assert (caught.value.status_code, caught.value.code) == (503, "overloaded")
+    assert caught.value.headers is not None
     assert int(caught.value.headers["Retry-After"]) >= 1
 
 

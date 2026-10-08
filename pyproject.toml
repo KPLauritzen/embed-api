@@ -30,6 +30,9 @@ dev = [
     "pytest>=8.3",
     "httpx>=0.28",
     "ruff>=0.8",
+    # Pinned exactly: ty is pre-1.0 and its checks change between releases.
+    "ty==0.0.85",
+    "pre-commit>=4",
 ]
 
 [build-system]
@@ -60,3 +63,11 @@ markers = ["slow: needs the real model (deselect with -m 'not slow')"]
 addopts = "-m 'not slow'"
 # FastAPI's TestClient still wraps httpx; the warning is about a future httpx2.
 filterwarnings = ["ignore:Using .httpx. with .starlette.testclient. is deprecated"]
+
+[tool.ty.src]
+# scripts/ are standalone PEP 723 scripts with their own dependencies.
+exclude = ["scripts"]
+
+[tool.ty.analysis]
+# Only installed with the `torch` extra; typed as Any when absent.
+allowed-unresolved-imports = ["torch", "sentence_transformers", "transformers.**"]
