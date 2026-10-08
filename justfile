@@ -55,6 +55,10 @@ test:
 test-slow:
     uv run --extra torch pytest -m slow
 
+# Retrieval quality of both backends on two Danish MTEB tasks (~10-15 min on CPU)
+eval:
+    uv run --extra torch --with datasets python scripts/eval_retrieval.py
+
 # Speed and fidelity of the backends
 bench:
     uv run --extra torch python scripts/benchmark.py --threads 4

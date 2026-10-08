@@ -26,5 +26,5 @@ items move from here into scope.
 
 ## Developer experience
 - Pretty console logs for local development (JSON-only today).
-- A larger fidelity evaluation of the int8 model (e.g. an MTEB retrieval task), beyond the
-  12-pair sanity check.
+- Close the int8 quality gap (1–3% nDCG@10): static quantisation calibrated on real text, or
+  keep the most sensitive layers in fp32. Evaluate on more MTEB tasks and languages.

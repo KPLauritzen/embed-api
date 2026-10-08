@@ -128,7 +128,9 @@ class SentenceTransformerEmbedder:
         self.model_name, self.revision = _read_source(model_dir)
         self._model = SentenceTransformer(str(model_dir), local_files_only=True)
         self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)  # counting, as in ONNX
-        self.dimension = self._model.get_embedding_dimension()
+        dimension = self._model.get_embedding_dimension()
+        assert dimension is not None  # always set for a sentence-embedding model
+        self.dimension = dimension
 
     def count_tokens(self, texts: list[str]) -> list[tuple[int, bool]]:
         return _count_tokens(self._tokenizer, texts)

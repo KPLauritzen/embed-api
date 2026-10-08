@@ -4,8 +4,8 @@ A production-minded HTTP API for the
 [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large)
 embedding model: 1024-dimensional, L2-normalised text embeddings for 100 languages,
 on CPU. By default it serves an int8-quantised ONNX version of the model: a quarter of the
-size, 3.5× faster than PyTorch for a single text and 1.8× the throughput for 32, with
-embeddings at cosine 0.995 to the original on average (minimum 0.9929) on our test set.
+size, 3.5× faster than PyTorch for a single text and 1.8× the throughput for 32, for a
+1–3% drop in retrieval quality (nDCG@10 on two Danish MTEB tasks).
 
 ```console
 $ curl -s localhost:8000/v1/embed -H 'content-type: application/json' \
@@ -68,7 +68,7 @@ Common tasks are in the [justfile](justfile) (`just` lists them):
 just setup        # uv sync + install the pre-commit hooks
 just check        # ruff lint + format check, ty type check, fast tests: what CI runs
 just test-slow    # real models in ./models: both backends, int8 vs fp32, batch invariance
-just serve        # also: model, model-torch, serve-torch, demo, bench, docker-build, slides
+just serve        # also: model, model-torch, serve-torch, demo, bench, eval, docker-build, slides
 ```
 
 The fast suite uses a fake model and runs in under a second. The slow suite needs both
@@ -220,9 +220,33 @@ the embeddings, and whether each query's top-ranked passage is unchanged.
 Where the speed comes from: for a single text, ONNX Runtime alone halves latency and int8
 cuts it by another ~40%. For 32 texts the fp32 ONNX row loses its edge because it runs one
 text at a time (the same code path as int8), so the 1.8× throughput there is int8's. Twelve
-pairs make the fidelity numbers a sanity check, not an evaluation. Rerun with
-`uv run --extra torch python scripts/benchmark.py --threads 4` (it downloads the fp32 ONNX
-file once).
+pairs make the fidelity numbers a sanity check, not an evaluation; for that, see below. Rerun
+with `just bench` (it downloads the fp32 ONNX file once).
+
+### Retrieval quality: what int8 costs
+
+`scripts/eval_retrieval.py` (`just eval`) runs two Danish retrieval tasks from
+[MTEB](https://github.com/embeddings-benchmark/mteb) through both backends: it embeds the
+corpus and queries with the e5 prefixes, ranks by cosine similarity, and scores nDCG@10
+(MTEB's main retrieval metric) and Recall@10.
+
+| Task (queries / corpus) | Backend | nDCG@10 | nDCG@10, MTEB convention | Recall@10 | Same top-1 as fp32 |
+|---|---|---|---|---|---|
+| DanFEVER (3,102 / 2,524) | PyTorch fp32 | 0.8396 | 0.4087 | 0.9869 | |
+| | **ONNX int8 (served)** | 0.8276 (−1.4%) | 0.4028 | 0.9815 | 91.5% |
+| TwitterHjerne (77 / 262) | PyTorch fp32 | 0.7539 | 0.7539 | 0.8071 | |
+| | **ONNX int8 (served)** | 0.7297 (−3.2%) | 0.7297 | 0.7693 | 83.1% |
+
+int8 costs 1–3% relative nDCG@10. DanFEVER is the larger, more reliable measurement;
+TwitterHjerne's 77 queries make its gap noisy. That is the price of 3.5× lower latency
+and a quarter of the size; a deployment that needs the last few percent can run the fp32
+backend with one setting (`EMBED_BACKEND=torch`).
+
+The two nDCG columns differ only in which queries are averaged. The first uses the queries
+that have a relevant document. MTEB averages over every judged query, and 3,271 DanFEVER
+queries are judged with no relevant document (claims whose evidence is not in the corpus),
+so they score 0 and halve the number. The fp32 MTEB-convention scores match the official
+`mteb` package exactly, which checks the evaluation code.
 
 ## Deployment
 
@@ -247,6 +271,7 @@ src/embed_api/
 scripts/export_onnx.py      build the int8 ONNX model from the pinned revision
 scripts/download_model.py   fetch the pinned fp32 model (torch backend); the one place the revision is pinned
 scripts/benchmark.py        speed and fidelity of the backends
+scripts/eval_retrieval.py   retrieval quality (nDCG@10) of both backends on Danish MTEB tasks
 scripts/smoke_test.sh       run the built image and check it embeds (CI)
 examples/demo.py            cross-lingual similarity demo
 examples/limits.py          truncation flag and token budget demo

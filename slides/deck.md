@@ -65,6 +65,7 @@ client ──▶ RequestContext (request id, access log)
 | **ONNX Runtime int8** | **0.56 GB** | **33 ms** | **1.04 s** | **0.993** |
 
 - Runtime halves single-text latency; **int8** takes another ~40% and gives **1.8× throughput**
+- Quality cost on Danish MTEB retrieval (nDCG@10): DanFEVER **0.840 → 0.828**, TwitterHjerne **0.754 → 0.730**: **1–3%**. fp32 matches official `mteb`
 - Quantised for **AVX2** (the deployment CPU); the Hub's int8 file targets AVX-512 VNNI
 - Runtime is ONNX Runtime + tokenizers: **no torch**, image 1.8 → 0.6 GB compressed
 
