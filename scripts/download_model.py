@@ -29,11 +29,11 @@ ALLOW_PATTERNS = [
     "sentencepiece.bpe.model",
 ]
 
-# Not pinned to a commit yet: replace "main" with one once the model has been tried.
 GEMMA_ID = "google/embeddinggemma-2"
-GEMMA_REVISION = "main"
+GEMMA_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
 GEMMA_ALLOW_PATTERNS = [
     "*.json",  # includes config_sentence_transformers.json, which holds the prompts
+    "chat_template.jinja",  # sentence-transformers needs it to tokenise
     "model*.safetensors",
     "tokenizer.model",
     "*_Pooling/*",

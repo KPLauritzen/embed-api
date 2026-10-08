@@ -50,7 +50,9 @@ def _load_tokenizer(model_dir: Path) -> tuple[Tokenizer, int]:
     """The model's fast tokenizer, truncating at the model's token limit, and that limit."""
     from tokenizers import Tokenizer
 
-    max_tokens = json.loads((model_dir / "sentence_bert_config.json").read_text())["max_seq_length"]
+    config = json.loads((model_dir / "sentence_bert_config.json").read_text())
+    # EmbeddingGemma 2 does not set it; its model card gives an 8192-token context.
+    max_tokens = config.get("max_seq_length", 8192)
     tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
     tokenizer.enable_truncation(max_length=max_tokens)
     tokenizer.no_padding()
@@ -152,6 +154,7 @@ class SentenceTransformerEmbedder:
             model_kwargs={"dtype": torch.float32},
         )
         self._tokenizer, self.max_tokens = _load_tokenizer(model_dir)  # for counting tokens
+        self._model.max_seq_length = self.max_tokens
         dimension = self._model.get_embedding_dimension()
         assert dimension is not None  # always set for a sentence-embedding model
         self.dimension = dimension
