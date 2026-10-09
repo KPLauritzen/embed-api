@@ -2,15 +2,15 @@
 
 This is an API serving the [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large) embedding model.
 
-By default it serves a quantized version of the model, but it is also possible to serve the original model.
+By default it serves a quantised version of the model, but it is also possible to serve the original model.
 
-The quantized model is a quarter of the size of the original model, serves 3.5x faster for a single text and loses only 1-3% performance on nDCG@10 on Danish retrieval benchmarks.
+The quantised model is a quarter of the size of the original model, serves 3.5x faster for a single text and loses only 1-3% performance on nDCG@10 on Danish retrieval benchmarks.
 
 ## Quickstart
 
 You need [uv](https://docs.astral.sh/uv/) installed to run this locally. Alternatively you can run the API in Docker.
 
-To build the quantized model and serve the API on port 8000:
+To build the quantised model and serve the API on port 8000:
 
 ```sh
 uv sync                                          # API and dev tools (no torch)
@@ -25,7 +25,7 @@ uv run python examples/demo.py http://localhost:8000     # similarity across Dan
 uv run python examples/limits.py http://localhost:8000   # truncation and the token budget
 ```
 
-Or post a request with `curl` (with some `jq` to filter the output)
+Or post a request with `curl` (with some `jq` to filter the output):
 
 ```console
 $ curl -s localhost:8000/v1/embed -H 'content-type: application/json' \
@@ -43,9 +43,10 @@ To serve the original fp32 model instead, download it and run the PyTorch backen
 uv run scripts/download_model.py                 # downloads ./models/e5 (2.2 GB)
 EMBED_BACKEND=torch uv run --extra torch uvicorn embed_api.main:app --port 8000
 ```
+
 ### Docker
 
-Build and run the docker image:
+Build and run the Docker image:
 
 ```sh
 docker build -t embed-api .
@@ -68,7 +69,6 @@ just check        # ruff, ty and the fast tests (CI runs the same command)
 just test-slow    # tests against the real models
 ```
 
-
 ## API
 
 | Endpoint | Purpose |
@@ -89,11 +89,9 @@ It was trained with `query: ` and `passage: ` prefixes. The API adds the prefix 
 
 The model reads at most 512 tokens. Longer texts are truncated, and the response marks them with `truncated: true`.
 
-The served model is an int8 version of the model, quantized for ONNX.
-
 ## Performance
 
-On an AMD Ryzen 9 5950X with 4 threads, the int8 model embeds one text in 33 ms (PyTorch fp32 takes 115 ms) and handles about 31 texts/s. The server uses about 1.5 GB of memory.
+On an AMD Ryzen 9 5950X with 4 threads, the int8 model embeds one text in 33 ms (PyTorch fp32 takes 115 ms) and handles about 31 texts/s. On the deployment server, memory peaks at about 1.5 GB.
 
 On Danish retrieval, nDCG@10 drops from 0.840 to 0.828 on [DanFEVER](https://huggingface.co/datasets/mteb/DanFeverRetrieval) and from 0.754 to 0.730 on [TwitterHjerne](https://huggingface.co/datasets/mteb/TwitterHjerneRetrieval).
 
@@ -102,12 +100,10 @@ evaluation.
 
 ## Deployment
 
-The API is deployed at my home kubernetes cluster.
-It's available from inside my home network at https://embed.home.primdal.dev/.
+The API runs on a home Kubernetes cluster and is reachable inside that network at https://embed.home.primdal.dev/.
 
-When CI pushes a new image to Github Container Registry, `argocd-image-updater` picks up the new image and ArgoCD rolls it out.
+When CI pushes a new image to GitHub Container Registry, `argocd-image-updater` picks up the new image and ArgoCD rolls it out.
 The Kubernetes manifests are kept in a separate (private) repository.
-
 
 ## Limitations
 

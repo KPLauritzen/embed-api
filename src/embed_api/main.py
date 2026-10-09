@@ -105,7 +105,6 @@ def create_app(
         description=DESCRIPTION,
         lifespan=lifespan,
     )
-    app.state.model = state
     errors.register(app)
     # The middleware added last runs first, so the request id exists before the size check.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
@@ -152,7 +151,7 @@ def create_app(
             usage=Usage(total_tokens=result.total_tokens),
         )
 
-    @app.get("/v1/info", tags=["meta"], summary="Model and limits", responses=errors.INFO_ERRORS)
+    @app.get("/v1/info", tags=["meta"], summary="Model and limits", responses=errors.MODEL_ERRORS)
     def info(service: Service) -> InfoResponse:
         return InfoResponse(
             model=service.embedder.model_name,
@@ -184,7 +183,7 @@ def create_app(
         "/health/ready",
         tags=["health"],
         summary="The model is loaded",
-        responses=errors.READY_ERRORS,
+        responses=errors.MODEL_ERRORS,
     )
     def ready(_: Service) -> HealthResponse:
         return HealthResponse(status="ready")

@@ -95,7 +95,7 @@ truncates to 512 tokens, averages the token vectors and normalises the result, a
 sentence-transformers does. The slow tests check that the token counts match
 sentence-transformers and that int8 embeddings stay above cosine 0.98 to fp32.
 [Retrieval quality](performance.md#retrieval-quality) measures what int8 costs. The PyTorch backend
-remains as the fp32 reference and for GPUs.
+remains as the fp32 reference.
 
 ### One text per forward pass
 

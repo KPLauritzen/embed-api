@@ -181,7 +181,7 @@ class EmbeddingService:
         self,
         texts: list[str],
         input_type: InputType,
-        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+        is_disconnected: Callable[[], Awaitable[bool]],
     ) -> EmbedResult:
         prefixed = [f"{input_type.value}: {text}" for text in texts]
 
@@ -209,7 +209,7 @@ class EmbeddingService:
         queue_ms = round((time.perf_counter() - queued_at) * 1000, 1)
 
         try:
-            if is_disconnected is not None and await is_disconnected():
+            if await is_disconnected():
                 raise APIError(499, "client_disconnected", "Client went away while queued.")
             # anyio does not cancel the thread, so the slot stays taken until inference
             # has finished, even if the client leaves.

@@ -52,10 +52,13 @@ def server_url() -> Iterator[str]:
 def test_unexpected_error_is_answered_and_logged_without_its_message(
     server_url: str, logs: io.StringIO
 ) -> None:
+    # Given a server whose model raises an error that contains the input (ExplodingEmbedder)
+    # When
     r = httpx.post(
         f"{server_url}/v1/embed", json={"input": "very-private-text", "input_type": "query"}
     )
 
+    # Then
     assert r.status_code == 500
     assert r.json()["error"]["code"] == "internal_error"
     assert "private" not in r.text

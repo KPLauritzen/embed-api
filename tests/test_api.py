@@ -16,8 +16,10 @@ def embed(client: TestClient, payload: dict, **kwargs):
 
 class TestEmbed:
     def test_single_string(self, client: TestClient, fake: FakeEmbedder) -> None:
+        # When
         r = embed(client, {"input": "hej verden", "input_type": "query"})
 
+        # Then
         assert r.status_code == 200
         body = r.json()
         assert (body["model"], body["dimension"]) == (fake.model_name, fake.dimension)
@@ -25,13 +27,17 @@ class TestEmbed:
         assert item["index"] == 0
         assert len(item["embedding"]) == fake.dimension
         assert np.isclose(np.linalg.norm(item["embedding"]), 1.0, atol=1e-5)
-        assert item == item | {"tokens": 5, "truncated": False}  # "query: hej verden" + 2
+        assert (item["tokens"], item["truncated"]) == (5, False)  # "query: hej verden" + 2
         assert body["usage"] == {"total_tokens": 5}
 
     def test_batch_keeps_order(self, client: TestClient) -> None:
+        # Given
         texts = ["one", "two", "three"]
+
+        # When
         r = embed(client, {"input": texts, "input_type": "passage"})
 
+        # Then
         assert r.status_code == 200
         assert [e["index"] for e in r.json()["embeddings"]] == [0, 1, 2]
 
@@ -39,14 +45,20 @@ class TestEmbed:
     def test_server_adds_e5_prefix(
         self, client: TestClient, fake: FakeEmbedder, input_type: str
     ) -> None:
+        # When
         embed(client, {"input": ["a", "b"], "input_type": input_type})
 
+        # Then
         assert fake.calls[-1] == [f"{input_type}: a", f"{input_type}: b"]
 
     def test_over_long_input_is_truncated_and_flagged(self, client: TestClient) -> None:
+        # Given
         long_text = " ".join(["word"] * 50)  # FakeEmbedder.max_tokens is 16
+
+        # When
         r = embed(client, {"input": [long_text, "short"], "input_type": "passage"})
 
+        # Then
         assert r.status_code == 200
         long_item, short_item = r.json()["embeddings"]
         assert (long_item["tokens"], long_item["truncated"]) == (16, True)
@@ -72,78 +84,99 @@ class TestValidation:
         ],
     )
     def test_rejected_with_422(self, client: TestClient, payload: dict) -> None:
+        # When
         r = embed(client, payload)
 
+        # Then
         assert r.status_code == 422
         assert r.json()["error"]["code"] == "validation_error"
 
     def test_validation_error_points_at_the_item_without_echoing_it(
         self, client: TestClient
     ) -> None:
+        # When
         r = embed(
             client,
             {"input": ["ok", "x" * 8001], "input_type": "query"},
             headers={"X-Request-ID": "req-422"},
         )
 
+        # Then
         error = r.json()["error"]
         assert (error["code"], error["request_id"]) == ("validation_error", "req-422")
         assert error["details"][0]["loc"] == ["body", "input", 1]
         assert "xxxx" not in r.text
 
     def test_token_budget(self, client: TestClient) -> None:
-        # 40 inputs x 16 tokens = 640 > the fixture's budget of 512
+        # Given 40 inputs x 16 tokens = 640, over the fixture's budget of 512
         texts = [" ".join(["word"] * 30)] * 40
+
+        # When
         r = embed(client, {"input": texts, "input_type": "passage"})
 
+        # Then
         assert r.status_code == 422
         assert r.json()["error"]["code"] == "token_budget_exceeded"
 
     def test_body_too_large(self, client: TestClient) -> None:
+        # When a body over the fixture's 20,000-byte limit is posted
         r = embed(client, {"input": ["x" * 8000, "y" * 8000, "z" * 8000], "input_type": "query"})
 
+        # Then
         assert r.status_code == 413
         assert r.json()["error"]["code"] == "request_too_large"
 
     def test_body_too_large_when_chunked(self, client: TestClient) -> None:
+        # Given a body streamed in chunks, with no Content-Length
         def chunks():
             yield b'{"input": "'
             for _ in range(30):
                 yield b"x" * 1000
             yield b'", "input_type": "query"}'
 
+        # When
         r = client.post("/v1/embed", content=chunks(), headers={"content-type": "application/json"})
 
+        # Then
         assert r.status_code == 413
         assert r.json()["error"]["code"] == "request_too_large"
 
 
 class TestRequestId:
     def test_generated_when_absent(self, client: TestClient) -> None:
+        # When
         r = client.get("/v1/info")
 
+        # Then
         assert len(r.headers["x-request-id"]) == 16
 
     def test_caller_id_is_echoed(self, client: TestClient) -> None:
+        # When
         r = client.get("/v1/info", headers={"X-Request-ID": "trace-abc.123"})
 
+        # Then
         assert r.headers["x-request-id"] == "trace-abc.123"
 
     def test_unsafe_caller_id_is_replaced(self, client: TestClient) -> None:
+        # When
         r = client.get("/v1/info", headers={"X-Request-ID": "bad id\nwith newline"})
 
+        # Then
         assert r.headers["x-request-id"] != "bad id\nwith newline"
 
 
 class TestLifecycle:
     def test_not_ready_while_loading(self, settings: Settings) -> None:
+        # Given a model that keeps loading until released
         release = threading.Event()
 
         def slow_factory(_: Settings) -> FakeEmbedder:
             release.wait(5)
             return FakeEmbedder()
 
+        # When the app has started but the model is still loading
         with TestClient(create_app(settings, embedder_factory=slow_factory)) as client:
+            # Then it is live but not ready, and refuses to embed
             assert client.get("/health/live").status_code == 200
             ready = client.get("/health/ready")
             assert ready.status_code == 503
@@ -152,10 +185,13 @@ class TestLifecycle:
             release.set()
 
     def test_load_failure_is_reported(self, settings: Settings) -> None:
+        # Given a model that fails to load
         def broken_factory(_: Settings) -> FakeEmbedder:
             raise OSError("no such model")
 
+        # When the app starts
         with TestClient(create_app(settings, embedder_factory=broken_factory)) as client:
+            # Then readiness reports the failure
             wait_until(
                 lambda: client.get("/health/ready").json()["error"]["code"] == "model_load_failed"
             )
@@ -164,8 +200,10 @@ class TestLifecycle:
 
 
 def test_info(client: TestClient, settings: Settings, fake: FakeEmbedder) -> None:
+    # When
     r = client.get("/v1/info")
 
+    # Then
     assert r.status_code == 200
     assert r.json()["revision"] == fake.revision
     assert r.json()["limits"]["max_total_tokens"] == settings.max_total_tokens
@@ -179,23 +217,29 @@ def test_info(client: TestClient, settings: Settings, fake: FakeEmbedder) -> Non
 def test_routing_errors_use_the_envelope(
     client: TestClient, method: str, path: str, status: int, code: str
 ) -> None:
+    # When
     r = client.request(method, path, headers={"X-Request-ID": "req-404"})
 
+    # Then
     assert r.status_code == status
     assert r.json()["error"]["code"] == code
     assert r.json()["error"]["request_id"] == "req-404"
 
 
 def test_root_redirects_to_docs(client: TestClient) -> None:
+    # When
     r = client.get("/", follow_redirects=False)
 
+    # Then
     assert r.status_code == 307
     assert r.headers["location"] == "/docs"
 
 
 def test_input_text_is_never_logged(client: TestClient, logs: io.StringIO) -> None:
+    # When
     embed(client, {"input": "very-private-text", "input_type": "query"})
 
+    # Then
     logged = logs.getvalue()
     assert '"event": "request"' in logged  # shows the log was captured at all
     assert "very-private-text" not in logged

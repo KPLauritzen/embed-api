@@ -16,6 +16,9 @@ For 32 texts, ONNX fp32 is no faster than PyTorch because it also runs one text 
 the 1.8x throughput at that size comes from int8. Twelve pairs are only a sanity check; the
 next section measures quality properly.
 
+On the deployment cluster (a Ryzen 5 6600U node with a 4-CPU limit), the server's memory
+peaks at 1.45 GB.
+
 ## Retrieval quality
 
 `scripts/eval_retrieval.py` (`just eval`) runs two Danish retrieval tasks from

@@ -36,19 +36,24 @@ def model(request: pytest.FixtureRequest) -> Embedder:
 
 
 def test_shape_and_norm(model: Embedder) -> None:
+    # When
     vectors = model.embed(["query: hej", "passage: verden"])
 
+    # Then
     assert vectors.shape == (2, 1024)
     assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0, atol=1e-5)
 
 
 def test_query_prefers_relevant_passage(model: Embedder) -> None:
+    # When
     query, relevant, irrelevant = model.embed(TEXTS[:3])
 
+    # Then
     assert query @ relevant > query @ irrelevant
 
 
 def test_danish_and_english_paraphrases_are_close(model: Embedder) -> None:
+    # When
     danish, english, unrelated = model.embed(
         [
             "query: Katten sover på sofaen.",
@@ -57,37 +62,50 @@ def test_danish_and_english_paraphrases_are_close(model: Embedder) -> None:
         ]
     )
 
+    # Then
     assert danish @ english > danish @ unrelated
 
 
 def test_token_count_includes_prefix_and_special_tokens(model: Embedder) -> None:
+    # When
     [(with_prefix, _)] = model.count_tokens(["query: hej"])
     [(bare, _)] = model.count_tokens(["hej"])
 
+    # Then
     assert with_prefix > bare >= 3  # <s> hej </s>
     assert model.count_tokens([TEXTS[4]]) == [(512, True)]
 
 
 def test_counts_match_what_sentence_transformers_feeds_the_model() -> None:
+    # Given
     torch_model = _load(Backend.TORCH)
     assert isinstance(torch_model, SentenceTransformerEmbedder)
 
+    # When
     ours = [n for n, _ in torch_model.count_tokens(TEXTS)]
     theirs = torch_model._model.tokenize(TEXTS)["attention_mask"].sum(dim=1).tolist()
+
+    # Then
     assert ours == theirs
 
 
 def test_onnx_int8_matches_torch_fp32() -> None:
+    # Given
     torch_model, onnx_model = _load(Backend.TORCH), _load(Backend.ONNX)
 
+    # When
     cosines = np.sum(torch_model.embed(TEXTS) * onnx_model.embed(TEXTS), axis=1)
+
+    # Then
     assert cosines.min() > 0.98, cosines
 
 
 def test_embedding_does_not_depend_on_the_rest_of_the_batch(model: Embedder) -> None:
     # Dynamic int8 quantisation scales activations per input tensor, so a
     # batched run would let one text's vector depend on its neighbours.
+    # When
     alone = model.embed([TEXTS[0]])[0]
     batched = model.embed([TEXTS[0], TEXTS[2], TEXTS[4]])[0]
 
+    # Then
     assert alone @ batched > 0.99999

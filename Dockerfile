@@ -40,4 +40,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
     EMBED_MODEL_PATH=/models/e5-int8
 USER 10001
 EXPOSE 8000
-CMD ["uvicorn", "embed_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+CMD ["uvicorn", "embed_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

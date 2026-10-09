@@ -61,7 +61,7 @@ eval:
 
 # Speed and fidelity of the backends
 bench:
-    uv run --extra torch python scripts/benchmark.py --threads 4
+    uv run --extra torch python scripts/benchmark.py
 
 docker-build:
     docker build -t embed-api .
