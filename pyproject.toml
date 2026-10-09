@@ -66,7 +66,8 @@ filterwarnings = ["ignore:Using .httpx. with .starlette.testclient. is deprecate
 
 [tool.ty.src]
 # scripts/ are standalone PEP 723 scripts with their own dependencies.
-exclude = ["scripts"]
+# .claude/ holds local agent worktrees, which are other checkouts of this repo.
+exclude = ["scripts", ".claude"]
 
 [tool.ty.analysis]
 # Only installed with the `torch` extra; typed as Any when absent.
