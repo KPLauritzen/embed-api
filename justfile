@@ -68,7 +68,3 @@ docker-build:
 
 docker-run:
     docker run --rm -p {{port}}:8000 embed-api
-
-# Render the slide deck to PDF
-slides:
-    npx -y @marp-team/marp-cli@latest slides/deck.md --pdf -o slides/deck.pdf

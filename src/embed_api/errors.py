@@ -23,6 +23,34 @@ class ErrorResponse(BaseModel):
     error: ErrorBody
 
 
+def _doc(description: str, **extra: Any) -> dict[str, Any]:
+    return {"model": ErrorResponse, "description": description, **extra}
+
+
+# The errors each route can return, for the OpenAPI docs.
+_INTERNAL_ERROR = _doc("`internal_error`: unexpected error; details are only in the server log.")
+_MODEL_UNAVAILABLE = _doc(
+    "`model_not_ready` while the model loads, or `model_load_failed` if loading failed."
+)
+Responses = dict[int | str, dict[str, Any]]
+
+EMBED_ERRORS: Responses = {
+    413: _doc("`request_too_large`: the body is larger than `EMBED_MAX_BODY_BYTES`."),
+    422: _doc("`validation_error` (problems listed in `details`) or `token_budget_exceeded`."),
+    500: _INTERNAL_ERROR,
+    503: _doc(
+        "`model_not_ready`, `model_load_failed`, or `overloaded` if no inference slot was "
+        "free within `EMBED_QUEUE_TIMEOUT_SECONDS`.",
+        headers={
+            "Retry-After": {"description": "Sent with `overloaded`.", "schema": {"type": "integer"}}
+        },
+    ),
+}
+INFO_ERRORS: Responses = {503: _MODEL_UNAVAILABLE}
+LIVE_ERRORS: Responses = {503: _doc("`model_load_failed`: restart the process.")}
+READY_ERRORS: Responses = {503: _MODEL_UNAVAILABLE}
+
+
 class APIError(HTTPException):
     """An HTTP error with a `code` for the error response body."""
 

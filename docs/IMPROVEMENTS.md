@@ -1,6 +1,6 @@
 # Improvements
 
-Things this version leaves out, roughly in order of value within each section.
+Potential improvements that I left out:
 
 ## API
 

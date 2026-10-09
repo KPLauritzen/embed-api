@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Annotated
 
 import anyio.to_thread
 import structlog
@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from embed_api import errors
 from embed_api.config import Settings
 from embed_api.embedder import Embedder, EmbeddingService, load_embedder
-from embed_api.errors import APIError, ErrorResponse
+from embed_api.errors import APIError
 from embed_api.middleware import (
     BodySizeLimitMiddleware,
     RequestContextMiddleware,
@@ -42,16 +42,6 @@ Text embeddings from [`intfloat/multilingual-e5-large`](https://huggingface.co/i
 * Texts longer than 512 tokens are truncated and marked `truncated: true`.
 * Every response has an `X-Request-ID` header, and error bodies contain the same id.
 """
-
-_ERRORS: dict[int | str, dict[str, Any]] = {
-    413: {"model": ErrorResponse, "description": "Request body too large."},
-    500: {"model": ErrorResponse, "description": "Unexpected server error."},
-    503: {
-        "model": ErrorResponse,
-        "description": "The model is loading or failed to load, or no inference slot was "
-        "free within the queue timeout (`overloaded`, with a Retry-After header).",
-    },
-}
 
 
 class ModelState:
@@ -138,10 +128,7 @@ def create_app(
         "/v1/embed",
         tags=["embeddings"],
         summary="Embed one or more texts",
-        responses={
-            **_ERRORS,
-            422: {"model": ErrorResponse, "description": "Invalid input or token budget exceeded."},
-        },
+        responses=errors.EMBED_ERRORS,
     )
     async def embed(body: EmbedRequest, request: Request, service: Service) -> EmbedResponse:
         result = await service.embed(body.input, body.input_type, request.is_disconnected)
@@ -165,7 +152,7 @@ def create_app(
             usage=Usage(total_tokens=result.total_tokens),
         )
 
-    @app.get("/v1/info", tags=["meta"], summary="Model and limits", responses=_ERRORS)
+    @app.get("/v1/info", tags=["meta"], summary="Model and limits", responses=errors.INFO_ERRORS)
     def info(service: Service) -> InfoResponse:
         return InfoResponse(
             model=service.embedder.model_name,
@@ -185,7 +172,7 @@ def create_app(
         "/health/live",
         tags=["health"],
         summary="The process is up and the model has not failed to load",
-        responses={503: _ERRORS[503]},
+        responses=errors.LIVE_ERRORS,
     )
     def live() -> HealthResponse:
         # A failed load does not recover by itself, so ask for a restart.
@@ -197,7 +184,7 @@ def create_app(
         "/health/ready",
         tags=["health"],
         summary="The model is loaded",
-        responses={503: _ERRORS[503]},
+        responses=errors.READY_ERRORS,
     )
     def ready(_: Service) -> HealthResponse:
         return HealthResponse(status="ready")
