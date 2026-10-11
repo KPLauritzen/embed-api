@@ -17,13 +17,14 @@ the same fp32 scores as the official mteb package. Both tasks together take
 
 import argparse
 import math
+import time
 from collections import defaultdict
 
 import numpy as np
 from datasets import load_dataset
 
 from embed_api.config import Backend, Settings
-from embed_api.embedder import Embedder, load_embedder
+from embed_api.embedder import Embedder, InputType, load_embedder, read_prefixes
 
 TASKS = ["mteb/DanFeverRetrieval", "mteb/TwitterHjerneRetrieval"]
 K = 10
@@ -55,10 +56,7 @@ def load_task(repo: str) -> tuple[list[str], list[str], list[str], list[str], di
 
 def embed(model: Embedder, texts: list[str], prefix: str) -> np.ndarray:
     return np.vstack(
-        [
-            model.embed([f"{prefix}: {t}" for t in texts[i : i + 256]])
-            for i in range(0, len(texts), 256)
-        ]
+        [model.embed([prefix + t for t in texts[i : i + 256]]) for i in range(0, len(texts), 256)]
     )
 
 
@@ -77,33 +75,47 @@ def evaluate(top: np.ndarray, doc_ids: list[str], query_ids: list[str], relevant
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument(
+        "--model",
+        action="append",
+        metavar="BACKEND:PATH",
+        help="model to evaluate, repeatable (default: torch:models/e5 and onnx:models/e5-int8); "
+        "'Same top-1' compares each model with the first",
+    )
     args = parser.parse_args()
-    models = {
-        backend: load_embedder(Settings(backend=backend, num_threads=args.threads))
-        for backend in (Backend.TORCH, Backend.ONNX)
-    }
+    models = []
+    for spec in args.model or ["torch:models/e5", "onnx:models/e5-int8"]:
+        backend, path = spec.split(":", 1)
+        settings = Settings(backend=Backend(backend), model_path=path, num_threads=args.threads)
+        models.append((load_embedder(settings), read_prefixes(settings.model_dir)))
 
     print(
-        "| Task | Backend | nDCG@10 | nDCG@10, MTEB convention | Recall@10 | Same top-1 |\n"
-        "|---|---|---|---|---|---|",
+        "| Task | Model | nDCG@10 | nDCG@10, MTEB convention | Recall@10 | Same top-1 | Time |\n"
+        "|---|---|---|---|---|---|---|",
         flush=True,
     )
     for repo in TASKS:
         doc_ids, docs, query_ids, queries, relevant, n_judged = load_task(repo)
-        tops = {}
-        for backend, model in models.items():
-            corpus, q = embed(model, docs, "passage"), embed(model, queries, "query")
+        first_top1 = None
+        for model, prefixes in models:
+            start = time.perf_counter()
+            corpus = embed(model, docs, prefixes[InputType.PASSAGE])
+            q = embed(model, queries, prefixes[InputType.QUERY])
+            seconds = time.perf_counter() - start
             scores = q @ corpus.T
             top = np.argpartition(-scores, K, axis=1)[:, :K]
             order = np.take_along_axis(scores, top, axis=1).argsort(axis=1)[:, ::-1]
-            tops[backend] = np.take_along_axis(top, order, axis=1)
-            m = evaluate(tops[backend], doc_ids, query_ids, relevant)
+            top = np.take_along_axis(top, order, axis=1)
+            if first_top1 is None:
+                first_top1 = top[:, 0]
+            m = evaluate(top, doc_ids, query_ids, relevant)
             # MTEB's convention: queries without a relevant document count as 0.
             mteb = m["ndcg@10"] * len(query_ids) / n_judged
-            agree = np.mean(tops[backend][:, 0] == tops[Backend.TORCH][:, 0])
             print(
-                f"| {repo.split('/')[1]} ({len(query_ids)} queries) | {model.backend} "
-                f"| {m['ndcg@10']:.4f} | {mteb:.4f} | {m['recall@10']:.4f} | {agree:.1%} |",
+                f"| {repo.split('/')[1]} ({len(query_ids)} queries) "
+                f"| {model.model_name.split('/')[-1]} {model.backend} "
+                f"| {m['ndcg@10']:.4f} | {mteb:.4f} | {m['recall@10']:.4f} "
+                f"| {np.mean(top[:, 0] == first_top1):.1%} | {seconds:.0f} s |",
                 flush=True,
             )
 

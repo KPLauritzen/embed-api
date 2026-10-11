@@ -29,17 +29,32 @@ ALLOW_PATTERNS = [
     "sentencepiece.bpe.model",
 ]
 
+GEMMA_ID = "google/embeddinggemma-2"
+GEMMA_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
+GEMMA_ALLOW_PATTERNS = [
+    "*.json",  # includes config_sentence_transformers.json, which holds the prompts
+    "chat_template.jinja",  # sentence-transformers needs it to tokenise
+    "model*.safetensors",
+    "tokenizer.model",
+    "*_Pooling/*",
+    "*_Dense/*",
+]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dest", default="models/e5")
-    dest = Path(parser.parse_args().dest)
+    parser.add_argument("--model", choices=["e5", "embeddinggemma-2"], default="e5")
+    parser.add_argument("--dest")
+    args = parser.parse_args()
+    if args.model == "e5":
+        model_id, revision, patterns = MODEL_ID, REVISION, ALLOW_PATTERNS
+    else:
+        model_id, revision, patterns = GEMMA_ID, GEMMA_REVISION, GEMMA_ALLOW_PATTERNS
+    dest = Path(args.dest or f"models/{args.model}")
 
-    snapshot_download(
-        repo_id=MODEL_ID, revision=REVISION, allow_patterns=ALLOW_PATTERNS, local_dir=dest
-    )
+    snapshot_download(repo_id=model_id, revision=revision, allow_patterns=patterns, local_dir=dest)
     # /v1/info reports this as the loaded model.
-    source = {"model_id": MODEL_ID, "revision": REVISION}
+    source = {"model_id": model_id, "revision": revision}
     (dest / "source.json").write_text(json.dumps(source, indent=2) + "\n")
     print(dest)
 

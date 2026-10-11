@@ -23,6 +23,9 @@ torch = [
     # Listed directly so the CPU-only index below applies to it; otherwise
     # sentence-transformers pulls the CUDA build transitively (~5 GB extra).
     "torch>=2.5",
+    # EmbeddingGemma 2's processor imports both, even for text only.
+    "pillow>=10",
+    "torchvision>=0.20",
 ]
 
 [dependency-groups]
@@ -44,6 +47,7 @@ packages = ["src/embed_api"]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
