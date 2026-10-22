@@ -3,7 +3,7 @@
 # --- deps: the locked runtime environment ----------------------------------
 # Default dependencies only: ONNX Runtime + tokenizers, no torch.
 FROM python:3.12-slim AS deps
-COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
@@ -22,13 +22,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # the 2.2 GB fp32 ONNX export, needs ~8.5 GB of RAM, and copies out only the
 # ~560 MB result.
 FROM python:3.12-slim AS model
-COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13 /uv /usr/local/bin/uv
 ENV UV_PYTHON_DOWNLOADS=never
 COPY scripts/download_model.py scripts/export_onnx.py /scripts/
 RUN uv run /scripts/export_onnx.py --dest /models/e5-int8 && rm -rf /root/.cache
 
 # --- runtime ---------------------------------------------------------------
 FROM python:3.12-slim AS runtime
+# The base image can lag Debian security updates. ca-certificates
+# 20250419+deb13u1 distrusts the compromised eMudhra intermediate CAs
+# (2026-10-17); the default ssl context reads this store.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 # Model first: it changes least, so app/dep changes don't invalidate it.
 COPY --from=model /models /models
